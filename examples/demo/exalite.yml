@@ -1,0 +1,16 @@
+# プロジェクト設定。検証(verify)と本番(prod)のインベントリを定義する。
+# `exalite run <mv> --target verify` / `exalite verify <mv>` / `exalite promote <mv>`
+# で切り替えて使う。verify.ini は `exalite env up` が自動生成する。
+environments:
+  verify:
+    inventory: environments/verify.ini
+  prod:
+    inventory: environments/prod.ini
+
+# 検証コンテナ(Docker)を本番へ寄せるための設定。`exalite env up` が参照する。
+# systemd(PID1) 稼働の AlmaLinux ベース（RHEL 互換・サブスクリプション不要）。
+# 導入ミドルや有効化サービスを本番に合わせる。
+verify_container:
+  base_image: almalinux/9-init:latest
+  packages: [httpd]              # 本番に合わせて追加（例: [httpd, chrony, postgresql]）
+  enable_services: [sshd, httpd] # systemd で自動起動させるサービス

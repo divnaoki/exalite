@@ -1,0 +1,7 @@
+# 同じ Role を、パラメータシートで一部の変数を上書きして実行する Movement。
+name: hello_params
+role: roles/hello
+hosts: all
+connection: local
+gather_facts: false
+parameter_sheet: params/hello.csv

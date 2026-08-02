@@ -1,0 +1,15 @@
+# exalite 検証環境。`exalite env up` から利用される。
+name: exalite-verify
+
+services:
+  almalinux:
+    build:
+      context: ./almalinux
+      args:
+        PUBKEY: "${EXALITE_PUBKEY:-}"
+    image: exalite-verify-almalinux:latest
+    container_name: exalite-verify-almalinux
+    hostname: verify-almalinux
+    ports:
+      - "2222:22"
+    # 本番を模した検証用途。必要に応じて設定を追加する。

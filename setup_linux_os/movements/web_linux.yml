@@ -1,0 +1,8 @@
+# httpd を導入し systemd で起動する、本番寄りの Movement。
+# systemd(PID1) 稼働の検証コンテナでハンドラ/サービス管理まで検証できる。
+#   exalite verify web_linux       # 検証コンテナで実行
+#   exalite promote web_linux      # 検証OKなら本番へ
+name: web_linux
+role: roles/webserver
+hosts: linux
+become: true

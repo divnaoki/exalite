@@ -1,0 +1,5 @@
+---
+- name: Install Package
+  ansible.builtin.dnf:
+    name: "{{ VAR_packages }}"
+    state: present
