@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>exalite WebUI</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --ink:#1f2430; --mut:#6b7280; --line:#e5e7eb;
+          --accent:#2563eb; --ok:#16a34a; --bad:#dc2626; --warn:#d97706; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Hiragino Sans",Meiryo,sans-serif;
+         background:var(--bg); color:var(--ink); font-size:14px; }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:12px 20px;
+           display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  header .path { color:var(--mut); font-size:12px; font-family:ui-monospace,Menlo,monospace; }
+  header .spacer { flex:1; }
+  nav { display:flex; gap:4px; padding:0 20px; background:var(--card); border-bottom:1px solid var(--line); }
+  nav button { border:0; background:none; padding:12px 16px; cursor:pointer; font-size:14px;
+               color:var(--mut); border-bottom:2px solid transparent; }
+  nav button.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+  main { padding:20px; max-width:1100px; margin:0 auto; }
+  .tab { display:none; } .tab.active { display:block; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; }
+  label { display:block; font-size:12px; color:var(--mut); margin:10px 0 4px; }
+  input[type=text], select, textarea { width:100%; padding:8px 10px; border:1px solid var(--line);
+        border-radius:6px; font-size:14px; font-family:inherit; background:#fff; }
+  textarea { font-family:ui-monospace,Menlo,monospace; min-height:70px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; } .row > div { flex:1; min-width:160px; }
+  .inline { display:flex; align-items:center; gap:6px; }
+  button.btn { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px;
+               cursor:pointer; font-size:14px; }
+  button.btn.sec { background:#eef1f5; color:var(--ink); }
+  button.btn.danger { background:#fdecec; color:var(--bad); }
+  button.btn.small { padding:4px 10px; font-size:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; color:var(--mut); font-weight:600; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+  .pill.role { background:#eef2ff; color:#4338ca; } .pill.playbook { background:#ecfdf5; color:#047857; }
+  .badge { display:inline-block; padding:2px 10px; border-radius:6px; font-size:12px; font-weight:600; }
+  .badge.running { background:#fef9c3; color:#854d0e; } .badge.success { background:#dcfce7; color:#166534; }
+  .badge.failed, .badge.error { background:#fee2e2; color:#991b1b; }
+  pre.log { background:#0f172a; color:#e2e8f0; padding:14px; border-radius:8px; overflow:auto;
+            max-height:460px; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; white-space:pre-wrap; }
+  .muted { color:var(--mut); font-size:12px; }
+  .warn { background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:8px 12px; border-radius:6px; font-size:12px; margin-bottom:10px; }
+  .toast { position:fixed; right:20px; bottom:20px; background:#111827; color:#fff; padding:10px 16px;
+           border-radius:8px; opacity:0; transition:opacity .2s; font-size:13px; max-width:360px; }
+  .toast.show { opacity:1; }
+  .list-item { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .list-item .grow { flex:1; }
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--mut); }
+  a.link { color:var(--accent); cursor:pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>exalite <span class="muted">WebUI</span></h1>
+  <span class="path" id="basePath"></span>
+  <span class="spacer"></span>
+  <button class="btn sec small" onclick="envAction('up')">検証環境 起動(env up)</button>
+  <button class="btn sec small" onclick="envAction('down')">停止(down)</button>
+</header>
+<nav>
+  <button data-tab="devices" class="active">機器一覧</button>
+  <button data-tab="movements">Movement 作成・紐付け</button>
+  <button data-tab="run">実行 / 実行画面</button>
+</nav>
+<main>
+
+  <!-- ===== 機器一覧 ===== -->
+  <section id="tab-devices" class="tab active">
+    <div class="card">
+      <h2>機器一覧設定（インベントリ）</h2>
+      <div class="row">
+        <div style="max-width:260px">
+          <label>環境</label>
+          <select id="devEnv" onchange="loadDevices()"></select>
+        </div>
+        <div class="inline" style="align-items:flex-end; flex:none;">
+          <button class="btn sec small" onclick="loadDevices()">再読込</button>
+        </div>
+      </div>
+      <div id="devWarn"></div>
+      <div style="overflow-x:auto; margin-top:12px;">
+      <table id="devTable">
+        <thead><tr><th style="width:120px">グループ</th><th style="width:180px">機器名</th>
+          <th>変数 (key=val を空白区切り, 例: ansible_host=10.0.0.11 ansible_user=ops)</th><th style="width:60px"></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:8px;">
+        <button class="btn sec small" onclick="addDeviceRow()">＋ 機器を追加</button>
+        <button class="btn small" onclick="saveDevices()">保存</button>
+      </div>
+      <p class="muted" id="devGroupVars" style="margin-top:10px;"></p>
+    </div>
+  </section>
+
+  <!-- ===== Movement ===== -->
+  <section id="tab-movements" class="tab">
+    <div class="card">
+      <h2>Movement 一覧</h2>
+      <div id="mvList"><p class="muted">読込中…</p></div>
+    </div>
+    <div class="card">
+      <h2 id="mvFormTitle">Movement 作成</h2>
+      <div class="row">
+        <div><label>名前 (name)</label><input type="text" id="mvName" placeholder="install_nginx"></div>
+        <div><label>対象グループ (hosts)</label><input type="text" id="mvHosts" placeholder="linux / windows / all"></div>
+      </div>
+
+      <div style="margin-top:8px; border-top:1px dashed var(--line); padding-top:8px;">
+        <label style="margin-top:0;">紐付け（Role / Playbook・パラメータシート）</label>
+        <div class="row">
+          <div>
+            <label>種別</label>
+            <select id="mvKind" onchange="onKindChange()">
+              <option value="role">Role</option><option value="playbook">Playbook</option>
+            </select>
+          </div>
+          <div id="mvRoleWrap">
+            <label>Role</label><select id="mvRole"></select>
+          </div>
+          <div id="mvPlaybookWrap" style="display:none">
+            <label>Playbook</label><select id="mvPlaybook"></select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>パラメータシート（任意・無ければ defaults/vars を使用）</label>
+            <select id="mvParam"><option value="">（なし）</option></select>
+          </div>
+          <div><label>connection（任意: local / ssh / winrm）</label><input type="text" id="mvConn" placeholder=""></div>
+        </div>
+        <div class="row">
+          <div>
+            <label>ansible.cfg（任意・この Movement 専用の設定で上書き）</label>
+            <select id="mvCfg"><option value="">（プロジェクト直下の ansible.cfg のみ）</option></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:8px;">
+        <div class="inline"><input type="checkbox" id="mvBecome"><label style="margin:0">become（昇格）</label></div>
+        <div class="inline"><input type="checkbox" id="mvGather" checked><label style="margin:0">gather_facts</label></div>
+      </div>
+      <label>extra_vars（任意 / 1行 <span class="mono">key: value</span>）</label>
+      <textarea id="mvExtra" placeholder="VAR_env: production"></textarea>
+
+      <div style="margin-top:12px; display:flex; gap:8px;">
+        <button class="btn" onclick="saveMovement()">保存</button>
+        <button class="btn sec" onclick="resetMovementForm()">クリア</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 実行 ===== -->
+  <section id="tab-run" class="tab">
+    <div class="card">
+      <h2>Movement 実行</h2>
+      <div class="row">
+        <div><label>Movement</label><select id="runMv"></select></div>
+        <div style="max-width:180px"><label>実行先 (target)</label><select id="runTarget"></select></div>
+        <div style="max-width:160px"><label>モード</label>
+          <select id="runMode"><option value="run">run（実行）</option>
+            <option value="dryrun">dryrun（--check）</option><option value="syntax">syntax（構文）</option></select></div>
+      </div>
+      <div class="inline" style="margin-top:10px;"><input type="checkbox" id="runNoPs"><label style="margin:0">パラメータシートを無視（defaults/vars のみ）</label></div>
+      <div style="margin-top:12px;"><button class="btn" onclick="doRun()">▶ 実行</button></div>
+    </div>
+    <div class="card">
+      <h2>実行画面 <span id="runStatus"></span></h2>
+      <div class="mono" id="runCmd" style="margin-bottom:8px;"></div>
+      <pre class="log" id="runLog">（未実行）</pre>
+    </div>
+    <div class="card">
+      <h2>最近の実行</h2>
+      <div id="runsList"><p class="muted">なし</p></div>
+    </div>
+  </section>
+
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+let META = {environments:[], roles:[], playbooks:[], paramsheets:[], modes:[]};
+let POLL = null;
+
+function toast(msg, bad){ const t=document.getElementById('toast'); t.textContent=msg;
+  t.style.background = bad ? '#7f1d1d' : '#111827'; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 2600); }
+async function api(path, opts){ const r = await fetch(path, opts); const j = await r.json().catch(()=>({}));
+  if(!r.ok){ throw new Error(j.error || ('HTTP '+r.status)); } return j; }
+
+// ---- タブ ----
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('tab-'+b.dataset.tab).classList.add('active');
+  if(b.dataset.tab==='run'){ refreshRuns(); }
+});
+
+// ---- 初期化 ----
+async function init(){
+  META = await api('/api/meta');
+  document.getElementById('basePath').textContent = META.base_dir;
+  // env selects
+  const devEnv=document.getElementById('devEnv'); devEnv.innerHTML='';
+  const runTarget=document.getElementById('runTarget'); runTarget.innerHTML='<option value="">（既定: movementのinventory）</option>';
+  META.environments.forEach(e=>{
+    devEnv.insertAdjacentHTML('beforeend', `<option value="${e.name}">${e.name}（${e.inventory}）</option>`);
+    runTarget.insertAdjacentHTML('beforeend', `<option value="${e.name}">${e.name}</option>`);
+  });
+  // role/playbook/param options
+  fillSelect('mvRole', META.roles);
+  fillSelect('mvPlaybook', META.playbooks);
+  const ps=document.getElementById('mvParam'); ps.innerHTML='<option value="">（なし）</option>';
+  META.paramsheets.forEach(p=>ps.insertAdjacentHTML('beforeend',`<option value="${p}">${p}</option>`));
+  const cf=document.getElementById('mvCfg');
+  cf.innerHTML=`<option value="">（${META.project_cfg ? 'プロジェクト直下の '+META.project_cfg+' のみ' : 'exalite の既定値のみ'}）</option>`;
+  (META.ansible_cfgs||[]).forEach(c=>cf.insertAdjacentHTML('beforeend',`<option value="${c}">${c}</option>`));
+  if(META.environments[0]) loadDevices();
+  loadMovements();
+}
+function fillSelect(id, arr){ const s=document.getElementById(id); s.innerHTML='';
+  arr.forEach(v=>s.insertAdjacentHTML('beforeend',`<option value="${v}">${v}</option>`));
+  if(!arr.length) s.innerHTML='<option value="">（なし）</option>'; }
+
+// ---- 機器一覧 ----
+async function loadDevices(){
+  const env=document.getElementById('devEnv').value;
+  const warn=document.getElementById('devWarn'); warn.innerHTML='';
+  try{
+    const d=await api('/api/devices/'+env);
+    if(d.generated) warn.innerHTML='<div class="warn">この環境（verify）のインベントリは <b>exalite env up</b> が自動生成します。手動編集は上書きされる可能性があります。</div>';
+    const tb=document.querySelector('#devTable tbody'); tb.innerHTML='';
+    (d.devices||[]).forEach(dev=>addDeviceRow(dev));
+    const gv=Object.entries(d.group_vars||{}).map(([g,v])=>`[${g}:vars] は保持されます`).join(' / ');
+    document.getElementById('devGroupVars').textContent = gv || '';
+  }catch(e){ toast(e.message,true); }
+}
+function addDeviceRow(dev){
+  dev=dev||{group:'linux',name:'',vars:{}};
+  const varsStr=Object.entries(dev.vars||{}).map(([k,v])=>`${k}=${v}`).join(' ');
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input type="text" class="d-group" value="${dev.group||''}"></td>
+    <td><input type="text" class="d-name" value="${dev.name||''}"></td>
+    <td><input type="text" class="d-vars" value="${varsStr}"></td>
+    <td><button class="btn danger small" onclick="this.closest('tr').remove()">削除</button></td>`;
+  document.querySelector('#devTable tbody').appendChild(tr);
+}
+async function saveDevices(){
+  const env=document.getElementById('devEnv').value;
+  const devices=[...document.querySelectorAll('#devTable tbody tr')].map(tr=>{
+    const g=tr.querySelector('.d-group').value.trim();
+    const n=tr.querySelector('.d-name').value.trim();
+    const vars={}; tr.querySelector('.d-vars').value.trim().split(/\s+/).forEach(tok=>{
+      if(tok.includes('=')){ const i=tok.indexOf('='); vars[tok.slice(0,i)]=tok.slice(i+1); }});
+    return n ? {group:g||'ungrouped', name:n, vars} : null;
+  }).filter(Boolean);
+  try{ await api('/api/devices/'+env,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({devices})});
+    toast('保存しました'); }catch(e){ toast(e.message,true); }
+}
+
+// ---- Movement ----
+async function loadMovements(){
+  const list=document.getElementById('mvList');
+  const runMv=document.getElementById('runMv'); runMv.innerHTML='';
+  try{
+    const arr=await api('/api/movements');
+    if(!arr.length){ list.innerHTML='<p class="muted">Movement がありません。下のフォームで作成してください。</p>'; return; }
+    list.innerHTML='';
+    arr.forEach(m=>{
+      if(m.valid===false){ list.insertAdjacentHTML('beforeend',
+        `<div class="list-item"><span class="grow">${m.name} <span class="muted">(不正: ${m.error})</span></span></div>`); return; }
+      list.insertAdjacentHTML('beforeend',
+        `<div class="list-item">
+           <span class="pill ${m.kind}">${m.kind}</span>
+           <span class="grow"><b>${m.name}</b>
+             <span class="mono">${m.target_ref} → hosts:${m.hosts}${m.parameter_sheet?(' / '+m.parameter_sheet):''}${m.ansible_cfg?(' / cfg:'+m.ansible_cfg):''}</span></span>
+           <button class="btn sec small" onclick="editMovement('${m.name}')">編集</button>
+           <button class="btn sec small" onclick="quickRun('${m.name}')">実行へ</button>
+           <button class="btn danger small" onclick="delMovement('${m.name}')">削除</button>
+         </div>`);
+      runMv.insertAdjacentHTML('beforeend',`<option value="${m.name}">${m.name}</option>`);
+    });
+  }catch(e){ list.innerHTML='<p class="muted">'+e.message+'</p>'; }
+}
+function onKindChange(){ const k=document.getElementById('mvKind').value;
+  document.getElementById('mvRoleWrap').style.display = k==='role'?'':'none';
+  document.getElementById('mvPlaybookWrap').style.display = k==='playbook'?'':'none'; }
+async function editMovement(name){
+  const d=await api('/api/movements/'+name);
+  document.getElementById('mvFormTitle').textContent='Movement 編集: '+name;
+  document.getElementById('mvName').value=d.name||name;
+  document.getElementById('mvHosts').value=d.hosts||'all';
+  document.getElementById('mvKind').value = d.playbook?'playbook':'role'; onKindChange();
+  if(d.role) document.getElementById('mvRole').value=d.role;
+  if(d.playbook) document.getElementById('mvPlaybook').value=d.playbook;
+  document.getElementById('mvParam').value=d.parameter_sheet||'';
+  document.getElementById('mvConn').value=d.connection||'';
+  document.getElementById('mvCfg').value=d.ansible_cfg||'';
+  document.getElementById('mvBecome').checked=!!d.become;
+  document.getElementById('mvGather').checked=d.gather_facts!==false;
+  document.getElementById('mvExtra').value=Object.entries(d.extra_vars||{}).map(([k,v])=>`${k}: ${v}`).join('\n');
+  window.scrollTo(0,document.body.scrollHeight);
+}
+function resetMovementForm(){
+  document.getElementById('mvFormTitle').textContent='Movement 作成';
+  ['mvName','mvHosts','mvConn','mvExtra'].forEach(i=>document.getElementById(i).value='');
+  document.getElementById('mvParam').value=''; document.getElementById('mvCfg').value='';
+  document.getElementById('mvBecome').checked=false;
+  document.getElementById('mvGather').checked=true; document.getElementById('mvKind').value='role'; onKindChange();
+}
+async function saveMovement(){
+  const kind=document.getElementById('mvKind').value;
+  const extra={}; document.getElementById('mvExtra').value.split('\n').forEach(l=>{
+    if(l.includes(':')){ const i=l.indexOf(':'); const k=l.slice(0,i).trim(); const v=l.slice(i+1).trim();
+      if(k) extra[k]=v; }});
+  const body={ name:document.getElementById('mvName').value.trim(), kind,
+    role:document.getElementById('mvRole').value, playbook:document.getElementById('mvPlaybook').value,
+    hosts:document.getElementById('mvHosts').value.trim()||'all',
+    parameter_sheet:document.getElementById('mvParam').value||null,
+    connection:document.getElementById('mvConn').value.trim()||null,
+    ansible_cfg:document.getElementById('mvCfg').value||null,
+    become:document.getElementById('mvBecome').checked,
+    gather_facts:document.getElementById('mvGather').checked, extra_vars:extra };
+  try{ const r=await api('/api/movements',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast('保存: '+r.saved); resetMovementForm(); loadMovements(); }
+  catch(e){ toast(e.message,true); }
+}
+async function delMovement(name){ if(!confirm(name+' を削除しますか?'))return;
+  try{ await api('/api/movements/'+name,{method:'DELETE'}); toast('削除しました'); loadMovements(); }catch(e){ toast(e.message,true); } }
+
+// ---- 実行 ----
+function switchTab(name){ document.querySelector(`nav button[data-tab="${name}"]`).click(); }
+function quickRun(name){ switchTab('run'); document.getElementById('runMv').value=name; }
+async function doRun(){
+  const body={ movement:document.getElementById('runMv').value, target:document.getElementById('runTarget').value||null,
+    mode:document.getElementById('runMode').value, no_paramsheet:document.getElementById('runNoPs').checked };
+  if(!body.movement){ toast('Movement を選択してください',true); return; }
+  try{ const info=await api('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast('実行開始'); pollRun(info.id); refreshRuns(); }catch(e){ toast(e.message,true); }
+}
+function statusBadge(s){ return `<span class="badge ${s}">${s}</span>`; }
+async function pollRun(id){
+  if(POLL) clearInterval(POLL);
+  const render=async()=>{
+    try{ const d=await api('/api/runs/'+id);
+      document.getElementById('runStatus').innerHTML=statusBadge(d.status)+(d.returncode!=null?` <span class="muted">rc=${d.returncode}</span>`:'');
+      document.getElementById('runCmd').textContent=d.command||'';
+      const log=document.getElementById('runLog'); log.textContent=d.log||'（出力待ち）'; log.scrollTop=log.scrollHeight;
+      if(d.status!=='running'){ clearInterval(POLL); POLL=null; refreshRuns(); }
+    }catch(e){ clearInterval(POLL); POLL=null; }
+  };
+  render(); POLL=setInterval(render, 1000);
+}
+async function refreshRuns(){
+  try{ const arr=await api('/api/runs'); const el=document.getElementById('runsList');
+    if(!arr.length){ el.innerHTML='<p class="muted">なし</p>'; return; }
+    el.innerHTML=''; arr.forEach(r=>el.insertAdjacentHTML('beforeend',
+      `<div class="list-item">${statusBadge(r.status)}
+        <span class="grow"><b>${r.movement}</b> <span class="muted">${r.mode}${r.target?(' / '+r.target):''} · ${r.started_at}</span></span>
+        <a class="link" onclick="pollRun('${r.id}')">ログ表示</a></div>`));
+  }catch(e){}
+}
+
+// ---- 検証環境 ----
+async function envAction(action){
+  if(action==='up' && !confirm('検証コンテナをビルド＆起動します。数分かかる場合があります。よろしいですか?')) return;
+  toast(action==='up'?'起動中…（時間がかかります）':'停止中…');
+  try{ await api('/api/env/'+action,{method:'POST'}); toast('env '+action+' 完了'); if(action==='up') loadDevices(); }
+  catch(e){ toast(e.message,true); }
+}
+
+init();
+</script>
+</body>
+</html>

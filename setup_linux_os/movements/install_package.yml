@@ -1,0 +1,6 @@
+---
+name: Install Package
+role: roles/install_package
+hosts: linux
+gather_facts: true
+become: true

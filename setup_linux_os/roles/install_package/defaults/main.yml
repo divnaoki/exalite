@@ -1,0 +1,7 @@
+---
+VAR_packages:
+    - "chrony"
+    - "vim-enhanced"
+    - "wget"
+    - "sysstat"
+    - "lsof"

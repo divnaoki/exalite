@@ -1,0 +1,6 @@
+# 検証コンテナ / 本番サーバ (linux グループ) への疎通確認 Movement。
+#   exalite verify ping_linux      # 検証コンテナで実行
+#   exalite promote ping_linux     # 検証OKなら本番へ
+name: ping_linux
+role: roles/sysinfo
+hosts: linux

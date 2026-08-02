@@ -1,0 +1,31 @@
+# exalite 検証環境。`exalite env up` から利用される。
+# systemd を PID1 で動かすため cgroup / cap 等の設定を付与している。
+name: exalite-verify
+
+services:
+  linux:
+    build:
+      context: ./linux
+      args:
+        BASE_IMAGE: "${EXALITE_BASE_IMAGE:-almalinux/9-init:latest}"
+        PUBKEY: "${EXALITE_PUBKEY:-}"
+        EXTRA_PACKAGES: "${EXALITE_PACKAGES:-httpd}"
+        ENABLE_SERVICES: "${EXALITE_ENABLE_SERVICES:-sshd httpd}"
+    image: exalite-verify-linux:latest
+    container_name: exalite-verify-linux
+    hostname: verify-linux
+    # --- systemd(PID1) を動かすための設定 ---
+    cgroup: host
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+    stop_signal: SIGRTMIN+3
+    tmpfs:
+      - /run
+      - /tmp
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    ports:
+      - "2222:22"
+      - "8080:80"    # 検証用 httpd を host から確認する場合に使用

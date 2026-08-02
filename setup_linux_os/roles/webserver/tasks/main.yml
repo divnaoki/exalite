@@ -1,0 +1,27 @@
+---
+- name: httpd をインストール
+  ansible.builtin.dnf:
+    name: httpd
+    state: present
+
+- name: 配信ページを配置
+  ansible.builtin.copy:
+    dest: /var/www/html/index.html
+    content: "exalite verified on {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}\n"
+    mode: "0644"
+  notify: restart httpd
+
+- name: httpd を有効化・起動 (systemd)
+  ansible.builtin.systemd:
+    name: httpd
+    enabled: true
+    state: started
+
+- name: httpd が active か確認
+  ansible.builtin.command: systemctl is-active httpd
+  register: httpd_active
+  changed_when: false
+
+- name: 結果表示
+  ansible.builtin.debug:
+    msg: "httpd is {{ httpd_active.stdout }}"

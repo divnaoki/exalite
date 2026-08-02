@@ -1,0 +1,7 @@
+# パラメータシートを使わない Movement。
+# 変数は roles/hello/defaults/main.yml の値がそのまま使われる。
+name: hello
+role: roles/hello
+hosts: all
+connection: local
+gather_facts: false

@@ -1,0 +1,4 @@
+---
+- name: greeting を表示
+  ansible.builtin.debug:
+    msg: "{{ VAR_greeting }}, {{ VAR_target }}! (from exalite)"

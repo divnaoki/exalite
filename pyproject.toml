@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exalite"
+version = "0.1.0"
+description = "Exastro-lite: ローカルのAnsible Roleを再アップロード不要で構文チェック/ドライラン/実行できる軽量CLI。パラメータシートは任意。"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "exalite" }]
+dependencies = [
+    "PyYAML>=5.1",
+]
+
+[project.optional-dependencies]
+web = ["Flask>=2.0"]
+
+[project.scripts]
+exalite = "exalite.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"exalite.web" = ["static/*"]
