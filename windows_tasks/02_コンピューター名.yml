@@ -1,0 +1,23 @@
+---
+# 02_コンピューター名 : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: コンピューター名を設定
+  ansible.windows.win_hostname:
+    name: "{{ computer_name }}"
+  register: rename_result
+
+- name: コンピューター名変更後に再起動
+  ansible.windows.win_reboot:
+  when: rename_result.reboot_required
+
+- name: 所属ワークグループを設定
+  ansible.windows.win_domain_membership:
+    workgroup_name: "{{ workgroup_name }}"
+    state: workgroup
+  register: workgroup_result
+
+- name: ワークグループ変更後に再起動
+  ansible.windows.win_reboot:
+  when: workgroup_result.reboot_required

@@ -1,0 +1,13 @@
+# Linux サーバ初期構築の作業フロー。登録した順に上から実行される。
+#   exalite conductor run setup_all --target verify   # 検証環境で通す
+#   exalite conductor run setup_all --mode syntax     # 全ステップ構文チェックのみ
+#
+# ステップ名は Movement の「ファイル名」(movements/<name>.yml の <name>)。
+name: setup_all
+description: 疎通確認 → ユーザー作成 → パッケージ導入 → Web サーバ構築
+movements:
+  - ping_linux            # 文字列だけなら既定動作（失敗したら以降を中断）
+  - setup_user
+  - install_package
+  - movement: web_linux
+    on_failure: stop      # stop（既定） / continue（失敗しても次へ進む）

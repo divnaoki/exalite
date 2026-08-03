@@ -3,6 +3,7 @@
 # で切り替えて使う。verify.ini は `exalite env up` が自動生成する。
 environments:
   verify:
-    inventory: environments/verify.ini
+    # ディレクトリ指定。配下の linux.ini(自動生成) と windows.ini(手動) が両方読まれる。
+    inventory: environments/verify
   prod:
     inventory: environments/prod.ini

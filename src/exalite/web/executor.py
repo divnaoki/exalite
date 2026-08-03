@@ -11,10 +11,11 @@ import os
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
+from ..conductor import Conductor, format_summary, run_conductor
 from ..movement import Movement
-from ..runner import Mode, prepare
+from ..runner import Mode, base_env, prepare
 
 
 @dataclass
@@ -31,6 +32,8 @@ class RunInfo:
     started_at: str = ""
     ended_at: Optional[str] = None
     command: List[str] = field(default_factory=list)
+    kind: str = "movement"           # movement | conductor
+    steps: List[dict] = field(default_factory=list)  # conductor のステップ結果
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +47,8 @@ class RunInfo:
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "command": " ".join(self.command),
+            "kind": self.kind,
+            "steps": self.steps,
         }
 
 
@@ -93,7 +98,7 @@ class Executor:
         return info
 
     def _run(self, info: RunInfo, cmd: List[str], cfg: str) -> None:
-        env = dict(os.environ)
+        env = base_env()
         env["ANSIBLE_CONFIG"] = cfg
         # WebUI ログは色コード無しで見やすく
         env["ANSIBLE_FORCE_COLOR"] = "0"
@@ -109,6 +114,117 @@ class Executor:
                 )
             info.returncode = proc.returncode
             info.status = "success" if proc.returncode == 0 else "failed"
+        except Exception as exc:  # noqa: BLE001 - ログに残して継続
+            info.status = "error"
+            try:
+                with open(info.log_path, "a", encoding="utf-8") as log:
+                    log.write(f"\n[executor error] {exc}\n")
+            except OSError:
+                pass
+        finally:
+            info.ended_at = _dt.datetime.now().isoformat(timespec="seconds")
+
+    def start_conductor(
+        self,
+        cond: Conductor,
+        mode: Mode,
+        *,
+        movements_dir: str,
+        resolve_inventory: Callable[[Optional[str]], Optional[str]],
+        target: Optional[str] = None,
+        force_no_paramsheet: bool = False,
+    ) -> RunInfo:
+        """Conductor のステップを登録順に実行し、ログを 1 本にまとめる。"""
+        run_id = f"{cond.name}-conductor-{_dt.datetime.now().strftime('%Y%m%d-%H%M%S-%f')[:-3]}"
+        run_dir = os.path.join(
+            cond.base_dir, ".exalite", "runs",
+            f"conductor-{cond.name}-{mode.value}-"
+            f"{_dt.datetime.now().strftime('%Y%m%d-%H%M%S')}",
+        )
+        os.makedirs(run_dir, exist_ok=True)
+        info = RunInfo(
+            id=run_id,
+            movement=cond.name,
+            mode=mode.value,
+            target=target,
+            log_path=os.path.join(run_dir, "output.log"),
+            run_dir=run_dir,
+            started_at=_dt.datetime.now().isoformat(timespec="seconds"),
+            kind="conductor",
+            steps=[{"index": i, "movement": s.movement, "status": "pending"}
+                   for i, s in enumerate(cond.steps, start=1)],
+        )
+        with self._lock:
+            self._runs[run_id] = info
+            self._order.append(run_id)
+
+        thread = threading.Thread(
+            target=self._run_conductor,
+            args=(info, cond, mode, movements_dir, resolve_inventory,
+                  target, force_no_paramsheet),
+            daemon=True,
+        )
+        thread.start()
+        return info
+
+    def _run_conductor(
+        self,
+        info: RunInfo,
+        cond: Conductor,
+        mode: Mode,
+        movements_dir: str,
+        resolve_inventory: Callable[[Optional[str]], Optional[str]],
+        target: Optional[str],
+        force_no_paramsheet: bool,
+    ) -> None:
+        try:
+            with open(info.log_path, "w", encoding="utf-8") as log:
+
+                def emit(line: str) -> None:
+                    log.write(line + "\n")
+                    log.flush()
+
+                def run_step(mv, step) -> int:
+                    step_target = step.target or target
+                    cmd, run_dir, cfg, used_sheet = prepare(
+                        mv, mode,
+                        force_no_paramsheet=force_no_paramsheet or step.no_paramsheet,
+                        inventory_override=resolve_inventory(step_target),
+                    )
+                    emit(f"# target={step_target or '(既定)'} "
+                         f"parameter_sheet={'使用' if used_sheet else '未使用'}")
+                    emit(f"$ {' '.join(cmd)}")
+                    env = base_env()
+                    env["ANSIBLE_CONFIG"] = cfg
+                    env["ANSIBLE_FORCE_COLOR"] = "0"
+                    env["ANSIBLE_NOCOLOR"] = "1"
+                    # subprocess が同じ fd に書くため、直前に flush しておく
+                    log.flush()
+                    proc = subprocess.run(
+                        cmd, env=env, stdout=log, stderr=subprocess.STDOUT
+                    )
+                    log.flush()
+                    return proc.returncode
+
+                emit(f"# Conductor={cond.name} mode={mode.value} "
+                     f"target={target or '(既定)'} steps={len(cond.steps)}")
+                if cond.description:
+                    emit(f"# {cond.description}")
+                emit("")
+                result = run_conductor(
+                    cond, run_step=run_step, movements_dir=movements_dir, emit=emit,
+                )
+                emit("")
+                for line in format_summary(result):
+                    emit(line)
+
+            info.steps = [
+                {"index": o.index, "movement": o.movement,
+                 "status": o.status, "returncode": o.returncode}
+                for o in result.outcomes
+            ]
+            info.returncode = result.returncode
+            info.status = "success" if result.ok else "failed"
         except Exception as exc:  # noqa: BLE001 - ログに残して継続
             info.status = "error"
             try:

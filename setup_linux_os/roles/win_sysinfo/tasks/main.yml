@@ -1,0 +1,10 @@
+---
+- name: 疎通確認 (win_ping)
+  ansible.windows.win_ping:
+
+- name: OS 情報を表示
+  ansible.builtin.debug:
+    msg: >-
+      {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }}
+      ({{ ansible_facts['architecture'] }})

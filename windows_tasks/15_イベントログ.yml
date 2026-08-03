@@ -1,0 +1,61 @@
+---
+# 15_イベントログ : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: Applicationログの保存パスを変更
+  ansible.windows.win_shell: |
+    wevtutil sl Application /lfn:"{{ eventlog_application_path }}"
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: Applicationログの最大サイズを設定
+  ansible.windows.win_eventlog:
+    name: Application
+    maximum_size: "{{ (eventlog_application_max_size_kb | int) * 1024 }}"
+    state: present
+
+- name: Applicationログの保持ポリシー(上書き/アーカイブ)を設定
+  ansible.windows.win_eventlog:
+    name: Application
+    overflow_action: "{{ eventlog_application_retention_policy }}"
+    state: present
+
+- name: Securityログの保存パスを変更
+  ansible.windows.win_shell: |
+    wevtutil sl Security /lfn:"{{ eventlog_security_path }}"
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: Securityログの最大サイズを設定
+  ansible.windows.win_eventlog:
+    name: Security
+    maximum_size: "{{ (eventlog_security_max_size_kb | int) * 1024 }}"
+    state: present
+
+- name: Securityログの保持ポリシー(上書き/アーカイブ)を設定
+  ansible.windows.win_eventlog:
+    name: Security
+    overflow_action: "{{ eventlog_security_retention_policy }}"
+    state: present
+
+- name: Systemログの保存パスを変更
+  ansible.windows.win_shell: |
+    wevtutil sl System /lfn:"{{ eventlog_system_path }}"
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: Systemログの最大サイズを設定
+  ansible.windows.win_eventlog:
+    name: System
+    maximum_size: "{{ (eventlog_system_max_size_kb | int) * 1024 }}"
+    state: present
+
+- name: Systemログの保持ポリシー(上書き/アーカイブ)を設定
+  ansible.windows.win_eventlog:
+    name: System
+    overflow_action: "{{ eventlog_system_retention_policy }}"
+    state: present

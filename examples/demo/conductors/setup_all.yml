@@ -1,0 +1,13 @@
+# Conductor: 登録した順に Movement を 1 つずつ実行する作業フロー。
+#   exalite conductor list              # 一覧
+#   exalite conductor run setup_all --target verify
+#   exalite conductor run setup_all --mode syntax   # 全ステップ構文チェック
+#
+# ステップ名は Movement の「ファイル名」(movements/<name>.yml の <name>)。
+name: setup_all
+description: 疎通確認 → Web サーバ構築 の順に実行する
+movements:
+  - ping_linux              # 文字列だけなら既定動作（失敗したら以降を中断）
+  - movement: web_linux
+    on_failure: stop        # stop（既定） / continue（失敗しても次へ進む）
+    # target: verify        # このステップだけ実行先を固定したい場合

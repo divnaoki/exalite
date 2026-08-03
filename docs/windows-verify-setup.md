@@ -190,10 +190,71 @@ verify-win01 | SUCCESS => {
 
 ---
 
-## 次のステップ（exalite 統合・実装予定）
+## exalite 側の設定（実装済み）
 
-1. 環境インベントリを **ディレクトリ化**して Linux(Docker) と Windows(実PC) を共存:
-   `environments/verify/linux.ini`（自動生成）＋ `environments/verify/windows.ini`（手動）。
-2. `movements/ping_win.yml`（`ansible.windows.win_ping`）など `hosts: windows` の Movement 追加。
-3. `exalite verify <mv>` / `exalite promote <mv>` を Windows ターゲットでもそのまま利用。
-4. `exalite env check-win`（Windows 検証 PC への WinRM 疎通チェック）コマンドの追加。
+検証環境のインベントリはディレクトリ形式になっており、Linux(Docker) と Windows(実機) が
+共存します。
+
+```
+environments/
+  .ssh/verify/id_ed25519    exalite env up が生成する検証コンテナ用の鍵
+  verify/
+    linux.ini               exalite env up が自動生成（検証コンテナ）
+    windows.ini             ← ここに本手順で設定した Windows 機を登録（手動管理）
+  prod.ini
+```
+
+`exalite.yml` は verify をディレクトリで指します。
+
+```yaml
+environments:
+  verify:
+    inventory: environments/verify
+```
+
+`environments/verify/windows.ini` の例（`exalite init` / `env up` が雛形を生成します）:
+
+```ini
+[windows]
+verify-win01 ansible_host=192.168.1.50
+
+[windows:vars]
+ansible_connection=winrm
+ansible_user=ansible
+ansible_port=5985
+ansible_winrm_transport=ntlm
+ansible_winrm_scheme=http
+ansible_password="{{ lookup('env', 'EXALITE_WIN_PASSWORD') }}"
+```
+
+パスワードは平文で置かず、環境変数（上記）か Ansible Vault を使ってください。
+このファイルは既定で `.gitignore` 済みです。
+
+使い方:
+
+```bash
+export EXALITE_WIN_PASSWORD='＜手順3で設定したパスワード＞'
+exalite env check-win        # WinRM 疎通チェック（win_ping）
+exalite verify ping_win      # hosts: windows の Movement を検証機で実行
+exalite promote ping_win     # 検証OKなら本番(prod.ini の windows グループ)へ
+```
+
+`exalite env check-win` は windows.ini にホストが未登録なら設定を促し、登録済みなら
+`ansible.windows.win_ping` を実行します（pywinrm 未導入なら明示エラー）。
+
+## Windows コンテナを検証環境にできないのか
+
+Docker で Windows 検証環境を使い捨てにできれば理想ですが、次の理由で採用していません。
+
+| 制約 | 内容 |
+|---|---|
+| ホスト OS | Windows コンテナは **Windows ホスト**（Docker Desktop の Windows containers モード）でのみ動作。macOS/Linux では不可 |
+| エディション | Windows 10/11 の **Pro / Enterprise / Education** が必要（Home は不可） |
+| 同時実行 | Docker Desktop は Linux コンテナと Windows コンテナを**切り替え式**で動かすため、Linux 検証コンテナと同時には使えない |
+| コントロールノード | **Ansible は Windows ネイティブ非対応**。Windows PC で exalite を動かす場合も WSL2 の中で動かし、そこから WinRM で接続することになる |
+| 機能差 | Windows コンテナは systemd/sshd が無く、**再起動もドメイン参加も GUI も不可**。`win_reboot` を含む Playbook や AD 前提の設定は検証できない |
+| サイズ | `servercore:ltsc2022` は展開後 5GB 超 |
+
+Windows PC 上で exalite を動かす場合は、**WSL2 の中で exalite + Ansible を動かし、その PC 自身
+（または別の Windows 機）を windows.ini に WinRM 接続先として登録**するのが、切り替え不要で
+Linux 検証コンテナと同時に使える構成です。

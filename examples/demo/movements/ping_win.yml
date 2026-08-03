@@ -1,0 +1,7 @@
+# Windows 検証機 / 本番機 (windows グループ) への疎通確認 Movement。
+# 事前に environments/verify/windows.ini へ接続先を登録しておく。
+#   exalite env check-win          # WinRM 疎通だけ先に確認
+#   exalite verify ping_win        # Windows 検証機で実行
+name: ping_win
+role: roles/win_sysinfo
+hosts: windows

@@ -23,6 +23,7 @@ import datetime as _dt
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
@@ -57,6 +58,19 @@ class RunResult:
     @property
     def ok(self) -> bool:
         return self.returncode == 0
+
+
+def base_env() -> dict:
+    """ansible 実行用の環境変数を組み立てる。
+
+    macOS の ObjC ランタイムは fork 後の初期化でクラッシュする。Ansible は
+    fork でタスクを並列実行するため、既知の回避策を既定で入れておく
+    （利用者が明示指定していればそちらを尊重する）。
+    """
+    env = dict(os.environ)
+    if sys.platform == "darwin":
+        env.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
+    return env
 
 
 def _timestamp() -> str:
@@ -207,6 +221,12 @@ def _write_ansible_cfg(mv: Movement, run_dir: str) -> str:
     parser["defaults"] = {
         "host_key_checking": "False",
         "retry_files_enabled": "False",
+        # Ansible の既定はディレクトリインベントリ内の .ini を無視する。
+        # exalite は environments/verify/{linux,windows}.ini を並べる構成なので、
+        # 既定リストから .ini だけ外す（.cfg 等は無視したまま）。
+        "inventory_ignore_extensions": (
+            ".pyc, .pyo, .swp, .bak, ~, .rpm, .md, .txt, .rst, .orig, .cfg, .retry"
+        ),
     }
 
     sources = cfg_sources(mv)
@@ -289,7 +309,7 @@ def run(
     if extra_args:
         cmd.extend(extra_args)
 
-    env = dict(os.environ)
+    env = base_env()
     env["ANSIBLE_CONFIG"] = cfg
     env.setdefault("ANSIBLE_FORCE_COLOR", "1")
 

@@ -1,0 +1,64 @@
+---
+# 17_サービス : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_bluetooth_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_bluetooth_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_hyper_v_time_synchronization_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_hyper_v_time_synchronization_service_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_microsoft_account_sign_in_assistant_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_microsoft_account_sign_in_assistant_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_program_compatibility_assistant_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_program_compatibility_assistant_service_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_quality_windows_audio_video_experience_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_quality_windows_audio_video_experience_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_still_image_acquisition_events_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_still_image_acquisition_events_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_touch_keyboard_and_handwriting_panel_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_touch_keyboard_and_handwriting_panel_service_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_windows_audio_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_windows_audio_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_windows_audio_endpoint_builder_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_windows_audio_endpoint_builder_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_windows_biometric_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_windows_biometric_service_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_windows_image_acquisition_wia_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_windows_image_acquisition_wia_startup_type }}"
+
+- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    name: "{{ service_windows_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    start_mode: "{{ service_windows_startup_type }}"

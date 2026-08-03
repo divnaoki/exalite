@@ -1,3 +1,5 @@
 .exalite/
-environments/verify/
-environments/verify.ini
+environments/.ssh/
+environments/verify/linux.ini
+# 接続情報（パスワード等）を含みうるため既定では追跡しない
+environments/verify/windows.ini

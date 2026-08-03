@@ -66,6 +66,7 @@
 <nav>
   <button data-tab="devices" class="active">機器一覧</button>
   <button data-tab="movements">Movement 作成・紐付け</button>
+  <button data-tab="conductors">Conductor</button>
   <button data-tab="run">実行 / 実行画面</button>
 </nav>
 <main>
@@ -78,6 +79,10 @@
         <div style="max-width:260px">
           <label>環境</label>
           <select id="devEnv" onchange="loadDevices()"></select>
+        </div>
+        <div style="max-width:220px" id="devFileWrap">
+          <label>インベントリファイル</label>
+          <select id="devFile" onchange="loadDevices(document.getElementById('devFile').value)"></select>
         </div>
         <div class="inline" style="align-items:flex-end; flex:none;">
           <button class="btn sec small" onclick="loadDevices()">再読込</button>
@@ -157,6 +162,51 @@
     </div>
   </section>
 
+  <!-- ===== Conductor ===== -->
+  <section id="tab-conductors" class="tab">
+    <div class="card">
+      <h2>Conductor 一覧 <span class="muted">（Movement を登録順に実行）</span></h2>
+      <div id="cdList"><p class="muted">読込中…</p></div>
+    </div>
+    <div class="card">
+      <h2 id="cdFormTitle">Conductor 作成</h2>
+      <div class="row">
+        <div><label>名前 (name)</label><input type="text" id="cdName" placeholder="setup_all"></div>
+        <div><label>説明（任意）</label><input type="text" id="cdDesc" placeholder="疎通確認 → Web サーバ構築"></div>
+      </div>
+      <label>実行するMovement（上から順に実行されます）</label>
+      <div style="overflow-x:auto;">
+      <table id="cdTable">
+        <thead><tr><th style="width:40px">#</th><th>Movement</th>
+          <th style="width:220px">失敗時</th><th style="width:150px">実行先(任意)</th>
+          <th style="width:120px">並べ替え</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      </div>
+      <div class="row" style="margin-top:10px; align-items:flex-end;">
+        <div style="max-width:280px"><label>追加する Movement</label><select id="cdAddMv"></select></div>
+        <div class="inline" style="flex:none;"><button class="btn sec small" onclick="addStepRow()">＋ ステップに追加</button></div>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:8px;">
+        <button class="btn" onclick="saveConductor()">保存</button>
+        <button class="btn sec" onclick="resetConductorForm()">クリア</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Conductor 実行</h2>
+      <div class="row">
+        <div><label>Conductor</label><select id="cdRun"></select></div>
+        <div style="max-width:180px"><label>実行先 (target)</label><select id="cdTarget"></select></div>
+        <div style="max-width:200px"><label>モード</label>
+          <select id="cdMode"><option value="run">run（実行）</option>
+            <option value="dryrun">dryrun（--check）</option><option value="syntax">syntax（構文のみ）</option></select></div>
+      </div>
+      <div class="inline" style="margin-top:10px;"><input type="checkbox" id="cdNoPs"><label style="margin:0">全ステップでパラメータシートを無視</label></div>
+      <div style="margin-top:12px;"><button class="btn" onclick="runConductor()">この Conductor を実行</button></div>
+      <p class="muted" style="margin-top:8px;">実行するとログは「実行 / 実行画面」タブに表示されます。</p>
+    </div>
+  </section>
+
   <!-- ===== 実行 ===== -->
   <section id="tab-run" class="tab">
     <div class="card">
@@ -202,6 +252,7 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('tab-'+b.dataset.tab).classList.add('active');
   if(b.dataset.tab==='run'){ refreshRuns(); }
+  if(b.dataset.tab==='conductors'){ loadConductors(); }
 });
 
 // ---- 初期化 ----
@@ -223,20 +274,29 @@ async function init(){
   const cf=document.getElementById('mvCfg');
   cf.innerHTML=`<option value="">（${META.project_cfg ? 'プロジェクト直下の '+META.project_cfg+' のみ' : 'exalite の既定値のみ'}）</option>`;
   (META.ansible_cfgs||[]).forEach(c=>cf.insertAdjacentHTML('beforeend',`<option value="${c}">${c}</option>`));
+  const cdTarget=document.getElementById('cdTarget');
+  cdTarget.innerHTML='<option value="">（既定: movementのinventory）</option>';
+  META.environments.forEach(e=>cdTarget.insertAdjacentHTML('beforeend',`<option value="${e.name}">${e.name}</option>`));
   if(META.environments[0]) loadDevices();
   loadMovements();
+  loadConductors();
 }
 function fillSelect(id, arr){ const s=document.getElementById(id); s.innerHTML='';
   arr.forEach(v=>s.insertAdjacentHTML('beforeend',`<option value="${v}">${v}</option>`));
   if(!arr.length) s.innerHTML='<option value="">（なし）</option>'; }
 
 // ---- 機器一覧 ----
-async function loadDevices(){
+async function loadDevices(file){
   const env=document.getElementById('devEnv').value;
   const warn=document.getElementById('devWarn'); warn.innerHTML='';
   try{
-    const d=await api('/api/devices/'+env);
-    if(d.generated) warn.innerHTML='<div class="warn">この環境（verify）のインベントリは <b>exalite env up</b> が自動生成します。手動編集は上書きされる可能性があります。</div>';
+    const d=await api('/api/devices/'+env+(file?('?file='+encodeURIComponent(file)):''));
+    const fsel=document.getElementById('devFile'); fsel.innerHTML='';
+    (d.files||[]).forEach(f=>fsel.insertAdjacentHTML('beforeend',
+      `<option value="${f}"${f===d.file?' selected':''}>${f}</option>`));
+    document.getElementById('devFileWrap').style.display=(d.files||[]).length>1?'':'none';
+    if(d.generated) warn.innerHTML='<div class="warn"><b>'+d.file+'</b> は <b>exalite env up</b> が自動生成します。手動編集は上書きされます。</div>';
+    else if(d.file==='windows.ini') warn.innerHTML='<div class="warn">Windows 検証機は Docker では作れません。実機/VM を WinRM 接続先として登録し、<span class="mono">exalite env check-win</span> で疎通確認してください（手順: docs/windows-verify-setup.md）。</div>';
     const tb=document.querySelector('#devTable tbody'); tb.innerHTML='';
     (d.devices||[]).forEach(dev=>addDeviceRow(dev));
     const gv=Object.entries(d.group_vars||{}).map(([g,v])=>`[${g}:vars] は保持されます`).join(' / ');
@@ -262,7 +322,8 @@ async function saveDevices(){
       if(tok.includes('=')){ const i=tok.indexOf('='); vars[tok.slice(0,i)]=tok.slice(i+1); }});
     return n ? {group:g||'ungrouped', name:n, vars} : null;
   }).filter(Boolean);
-  try{ await api('/api/devices/'+env,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({devices})});
+  const file=document.getElementById('devFile').value||null;
+  try{ await api('/api/devices/'+env,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({devices, file})});
     toast('保存しました'); }catch(e){ toast(e.message,true); }
 }
 
@@ -288,6 +349,9 @@ async function loadMovements(){
          </div>`);
       runMv.insertAdjacentHTML('beforeend',`<option value="${m.name}">${m.name}</option>`);
     });
+    // Conductor のステップは Movement の「ファイル名」で指定する
+    MOVEMENT_FILES = arr.filter(m=>m.valid!==false).map(m=>m.file||m.name);
+    fillSelect('cdAddMv', MOVEMENT_FILES);
   }catch(e){ list.innerHTML='<p class="muted">'+e.message+'</p>'; }
 }
 function onKindChange(){ const k=document.getElementById('mvKind').value;
@@ -336,6 +400,98 @@ async function saveMovement(){
 async function delMovement(name){ if(!confirm(name+' を削除しますか?'))return;
   try{ await api('/api/movements/'+name,{method:'DELETE'}); toast('削除しました'); loadMovements(); }catch(e){ toast(e.message,true); } }
 
+// ---- Conductor ----
+let MOVEMENT_FILES=[];
+async function loadConductors(){
+  const list=document.getElementById('cdList');
+  const sel=document.getElementById('cdRun'); sel.innerHTML='';
+  try{
+    const arr=await api('/api/conductors');
+    if(!arr.length){ list.innerHTML='<p class="muted">Conductor がありません。下のフォームで作成してください。</p>'; return; }
+    list.innerHTML='';
+    arr.forEach(c=>{
+      if(c.valid===false){ list.insertAdjacentHTML('beforeend',
+        `<div class="list-item"><span class="grow">${c.name} <span class="muted">(不正: ${c.error})</span></span></div>`); return; }
+      const flow=c.steps.map((s,i)=>`${i+1}. ${s.movement}${s.on_failure==='continue'?'*':''}`).join(' → ');
+      list.insertAdjacentHTML('beforeend',
+        `<div class="list-item">
+           <span class="pill role">${c.steps.length} steps</span>
+           <span class="grow"><b>${c.name}</b>${c.description?(' <span class="muted">'+c.description+'</span>'):''}
+             <br><span class="mono">${flow}</span></span>
+           <button class="btn sec small" onclick="editConductor('${c.name}')">編集</button>
+           <button class="btn sec small" onclick="runConductor('${c.name}')">実行</button>
+           <button class="btn danger small" onclick="delConductor('${c.name}')">削除</button>
+         </div>`);
+      sel.insertAdjacentHTML('beforeend',`<option value="${c.name}">${c.name}</option>`);
+    });
+  }catch(e){ list.innerHTML='<p class="muted">'+e.message+'</p>'; }
+}
+function addStepRow(step){
+  const mv = step ? step.movement : document.getElementById('cdAddMv').value;
+  if(!mv){ toast('追加する Movement がありません',true); return; }
+  const opts = MOVEMENT_FILES.includes(mv) ? MOVEMENT_FILES : [mv, ...MOVEMENT_FILES];
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td class="s-no muted"></td>
+    <td><select class="s-mv">${opts.map(o=>`<option value="${o}"${o===mv?' selected':''}>${o}</option>`).join('')}</select></td>
+    <td><select class="s-fail">
+      <option value="stop"${(!step||step.on_failure!=='continue')?' selected':''}>中断する (stop)</option>
+      <option value="continue"${(step&&step.on_failure==='continue')?' selected':''}>次へ進む (continue)</option></select></td>
+    <td><input type="text" class="s-target" placeholder="（既定）" value="${step&&step.target?step.target:''}"></td>
+    <td><button class="btn sec small" onclick="moveStep(this,-1)">↑</button>
+        <button class="btn sec small" onclick="moveStep(this,1)">↓</button>
+        <button class="btn danger small" onclick="this.closest('tr').remove();renumberSteps()">削除</button></td>`;
+  document.querySelector('#cdTable tbody').appendChild(tr);
+  renumberSteps();
+}
+function renumberSteps(){
+  [...document.querySelectorAll('#cdTable tbody tr')].forEach((tr,i)=>tr.querySelector('.s-no').textContent=i+1);
+}
+function moveStep(btn, dir){
+  const tr=btn.closest('tr'), tb=tr.parentNode;
+  if(dir<0 && tr.previousElementSibling) tb.insertBefore(tr, tr.previousElementSibling);
+  if(dir>0 && tr.nextElementSibling) tb.insertBefore(tr.nextElementSibling, tr);
+  renumberSteps();
+}
+async function editConductor(name){
+  const d=await api('/api/conductors/'+name);
+  document.getElementById('cdFormTitle').textContent='Conductor 編集: '+name;
+  document.getElementById('cdName').value=d.name||name;
+  document.getElementById('cdDesc').value=d.description||'';
+  document.querySelector('#cdTable tbody').innerHTML='';
+  (d.movements||[]).forEach(m=>addStepRow(typeof m==='string'?{movement:m}:m));
+  window.scrollTo(0,document.body.scrollHeight);
+}
+function resetConductorForm(){
+  document.getElementById('cdFormTitle').textContent='Conductor 作成';
+  document.getElementById('cdName').value=''; document.getElementById('cdDesc').value='';
+  document.querySelector('#cdTable tbody').innerHTML='';
+}
+async function saveConductor(){
+  const steps=[...document.querySelectorAll('#cdTable tbody tr')].map(tr=>({
+    movement: tr.querySelector('.s-mv').value,
+    on_failure: tr.querySelector('.s-fail').value,
+    target: tr.querySelector('.s-target').value.trim()||null }));
+  const body={ name:document.getElementById('cdName').value.trim(),
+    description:document.getElementById('cdDesc').value.trim()||null, movements:steps };
+  if(!body.name){ toast('名前を入力してください',true); return; }
+  if(!steps.length){ toast('Movement を 1 つ以上追加してください',true); return; }
+  try{ const r=await api('/api/conductors',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast('保存: '+r.saved); resetConductorForm(); loadConductors(); }
+  catch(e){ toast(e.message,true); }
+}
+async function delConductor(name){ if(!confirm(name+' を削除しますか?'))return;
+  try{ await api('/api/conductors/'+name,{method:'DELETE'}); toast('削除しました'); loadConductors(); }catch(e){ toast(e.message,true); } }
+async function runConductor(name){
+  const target=name||document.getElementById('cdRun').value;
+  if(!target){ toast('Conductor を選択してください',true); return; }
+  const body={ conductor:target, mode:document.getElementById('cdMode').value,
+    target:document.getElementById('cdTarget').value||null,
+    no_paramsheet:document.getElementById('cdNoPs').checked };
+  try{ const info=await api('/api/run-conductor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast('Conductor 実行開始'); switchTab('run'); pollRun(info.id); refreshRuns(); }
+  catch(e){ toast(e.message,true); }
+}
+
 // ---- 実行 ----
 function switchTab(name){ document.querySelector(`nav button[data-tab="${name}"]`).click(); }
 function quickRun(name){ switchTab('run'); document.getElementById('runMv').value=name; }
@@ -364,7 +520,7 @@ async function refreshRuns(){
     if(!arr.length){ el.innerHTML='<p class="muted">なし</p>'; return; }
     el.innerHTML=''; arr.forEach(r=>el.insertAdjacentHTML('beforeend',
       `<div class="list-item">${statusBadge(r.status)}
-        <span class="grow"><b>${r.movement}</b> <span class="muted">${r.mode}${r.target?(' / '+r.target):''} · ${r.started_at}</span></span>
+        <span class="grow">${r.kind==='conductor'?'<span class="pill playbook">Conductor</span> ':''}<b>${r.movement}</b> <span class="muted">${r.mode}${r.target?(' / '+r.target):''} · ${r.started_at}</span></span>
         <a class="link" onclick="pollRun('${r.id}')">ログ表示</a></div>`));
   }catch(e){}
 }

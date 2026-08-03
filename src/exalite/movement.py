@@ -80,6 +80,29 @@ def _resolve(base_dir: str, value: Optional[str]) -> Optional[str]:
     return os.path.normpath(os.path.join(base_dir, value))
 
 
+def resolve_movement_path(name_or_path: str, movements_dir: str) -> str:
+    """Movement 名またはパスから YAML ファイルのパスを解決する。
+
+    名前で指定した場合は ``<movements_dir>/<名前>.yml``（または .yaml）を探す。
+    Movement YAML 内の ``name:`` ではなくファイル名で解決する点に注意。
+    """
+    if os.path.isfile(name_or_path):
+        return name_or_path
+    for ext in (".yml", ".yaml"):
+        candidate = os.path.join(movements_dir, name_or_path + ext)
+        if os.path.isfile(candidate):
+            return candidate
+        # 拡張子付きで渡されたケース
+        if name_or_path.endswith(ext):
+            candidate2 = os.path.join(movements_dir, name_or_path)
+            if os.path.isfile(candidate2):
+                return candidate2
+    raise MovementError(
+        f"Movement '{name_or_path}' が見つかりません "
+        f"(検索先: {movements_dir}/ とカレントパス)"
+    )
+
+
 def load_movement(path: str, base_dir: Optional[str] = None) -> Movement:
     """Movement YAML ファイルを読み込んで検証する。
 

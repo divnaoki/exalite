@@ -1,0 +1,39 @@
+---
+# 11_変更レジストリ : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: レジストリ値 DumpCount を設定
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
+    name: DumpCount
+    data: "{{ reg_wer_dumpcount }}"
+    type: dword
+
+- name: レジストリ値 DumpFolder を設定
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
+    name: DumpFolder
+    data: "{{ reg_wer_dumpfolder }}"
+    type: dword
+
+- name: レジストリ値 DumpType を設定
+  ansible.windows.win_regedit:
+    path: HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
+    name: DumpType
+    data: "{{ reg_wer_dumptype }}"
+    type: dword
+
+- name: レジストリ値 DisabledComponents を設定
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters
+    name: DisabledComponents
+    data: "{{ reg_tcpip6_disabledcomponents }}"
+    type: dword
+
+- name: レジストリ値 EventLogFlags を設定
+  ansible.windows.win_regedit:
+    path: HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Config
+    name: EventLogFlags
+    data: "{{ reg_w32time_eventlogflags }}"
+    type: dword
