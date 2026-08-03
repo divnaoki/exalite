@@ -1,19 +1,49 @@
 ---
 # 12_NICチーミングIPv6 : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   nicteam1_name (文字列): 文字列・環境依存値(例: 要確定)
+#   nicteam1_member1 (文字列): 文字列・環境依存値(例: 要確定)
+#   nicteam1_member2 (文字列): 文字列・環境依存値(例: 要確定)
+#   nicteam1_mode (選択): SwitchIndependent / Static / LACP
+#   nicteam1_load_balance_mode (選択): Dynamic / HyperVPort / IPAddresses / MacAddresses / TransportPorts
+#   nicteam1_standby_adapter (文字列): 文字列・環境依存値(例: 要確定)
+#   nicteam2_name (文字列): 文字列・環境依存値(例: 要確定)
+#   nicteam2_member1 (文字列): 文字列・環境依存値(例: 要確定)
+#   nicteam2_member2 (文字列): 文字列・環境依存値(例: 要確定)
+#   nicteam2_mode (選択): SwitchIndependent / Static / LACP
+#   nicteam2_load_balance_mode (選択): Dynamic / HyperVPort / IPAddresses / MacAddresses / TransportPorts
+#   nicteam2_standby_adapter (文字列): 文字列・環境依存値(例: 要確定)
+#   nic_server_subnet_alias (文字列): 例: 要確定  # サーバサブネット用NICのアダプター名
+#   nic_metric_server_subnet (数値): 数値(例: 要確定)
+#   nic_backup_storage_subnet_alias (文字列): 例: 要確定  # バックアップストレージ接続LAN用NICのアダプター名
+#   nic_metric_backup_storage_subnet (数値): 数値(例: 要確定)
+#   nic_management_subnet_alias (文字列): 例: 要確定  # 運用管理LAN用NICのアダプター名
+#   nic_metric_management_subnet (数値): 数値(例: 要確定)
+#   nic_backup_lan_subnet_alias (文字列): 例: 要確定  # バックアップLAN用NICのアダプター名
+#   nic_metric_backup_lan_subnet (数値): 数値(例: 要確定)
+#──────────────────────────────────────────────
 
 - name: NICチーム1を作成
   community.windows.win_nic_teaming:
+    # 設定可能な値 → nicteam1_name(文字列): 文字列・環境依存値(例: 要確定)
     name: "{{ nicteam1_name }}"
     members:
+      # 設定可能な値 → nicteam1_member1(文字列): 文字列・環境依存値(例: 要確定)
       - "{{ nicteam1_member1 }}"
+      # 設定可能な値 → nicteam1_member2(文字列): 文字列・環境依存値(例: 要確定)
       - "{{ nicteam1_member2 }}"
+    # 設定可能な値 → nicteam1_mode(選択): SwitchIndependent / Static / LACP
     teaming_mode: "{{ nicteam1_mode }}"
+    # 設定可能な値 → nicteam1_load_balance_mode(選択): Dynamic / HyperVPort / IPAddresses / MacAddresses / TransportPorts
     load_balancing_mode: "{{ nicteam1_load_balance_mode }}"
     state: present
 
 - name: NICチーム1のスタンバイアダプターを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nicteam1_standby_adapter(文字列): 文字列・環境依存値(例: 要確定) / nicteam1_name(文字列): 文字列・環境依存値(例: 要確定)
     Set-NetLbfoTeamMember -Name "{{ nicteam1_standby_adapter }}" -AdministrativeMode Standby -Team "{{ nicteam1_name }}"
   args:
     executable: powershell
@@ -21,16 +51,22 @@
 
 - name: NICチーム2を作成
   community.windows.win_nic_teaming:
+    # 設定可能な値 → nicteam2_name(文字列): 文字列・環境依存値(例: 要確定)
     name: "{{ nicteam2_name }}"
     members:
+      # 設定可能な値 → nicteam2_member1(文字列): 文字列・環境依存値(例: 要確定)
       - "{{ nicteam2_member1 }}"
+      # 設定可能な値 → nicteam2_member2(文字列): 文字列・環境依存値(例: 要確定)
       - "{{ nicteam2_member2 }}"
+    # 設定可能な値 → nicteam2_mode(選択): SwitchIndependent / Static / LACP
     teaming_mode: "{{ nicteam2_mode }}"
+    # 設定可能な値 → nicteam2_load_balance_mode(選択): Dynamic / HyperVPort / IPAddresses / MacAddresses / TransportPorts
     load_balancing_mode: "{{ nicteam2_load_balance_mode }}"
     state: present
 
 - name: NICチーム2のスタンバイアダプターを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nicteam2_standby_adapter(文字列): 文字列・環境依存値(例: 要確定) / nicteam2_name(文字列): 文字列・環境依存値(例: 要確定)
     Set-NetLbfoTeamMember -Name "{{ nicteam2_standby_adapter }}" -AdministrativeMode Standby -Team "{{ nicteam2_name }}"
   args:
     executable: powershell
@@ -38,6 +74,7 @@
 
 - name: サーバサブネットのインターフェイスメトリックを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic_server_subnet_alias(文字列): 例: 要確定 / nic_metric_server_subnet(数値): 数値(例: 要確定)
     Set-NetIPInterface -InterfaceAlias "{{ nic_server_subnet_alias }}" -InterfaceMetric {{ nic_metric_server_subnet }}
   args:
     executable: powershell
@@ -45,6 +82,7 @@
 
 - name: バックアップストレージ接続LANサブネットのインターフェイスメトリックを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic_backup_storage_subnet_alias(文字列): 例: 要確定 / nic_metric_backup_storage_subnet(数値): 数値(例: 要確定)
     Set-NetIPInterface -InterfaceAlias "{{ nic_backup_storage_subnet_alias }}" -InterfaceMetric {{ nic_metric_backup_storage_subnet }}
   args:
     executable: powershell
@@ -52,6 +90,7 @@
 
 - name: 運用管理LANサブネットのインターフェイスメトリックを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic_management_subnet_alias(文字列): 例: 要確定 / nic_metric_management_subnet(数値): 数値(例: 要確定)
     Set-NetIPInterface -InterfaceAlias "{{ nic_management_subnet_alias }}" -InterfaceMetric {{ nic_metric_management_subnet }}
   args:
     executable: powershell
@@ -59,6 +98,7 @@
 
 - name: バックアップLANサブネットのインターフェイスメトリックを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic_backup_lan_subnet_alias(文字列): 例: 要確定 / nic_metric_backup_lan_subnet(数値): 数値(例: 要確定)
     Set-NetIPInterface -InterfaceAlias "{{ nic_backup_lan_subnet_alias }}" -InterfaceMetric {{ nic_metric_backup_lan_subnet }}
   args:
     executable: powershell

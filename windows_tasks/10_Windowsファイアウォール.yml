@@ -1,9 +1,23 @@
 ---
 # 10_Windowsファイアウォール : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   fw_domain_state (選択): 有効 / 無効
+#   fw_domain_inbound_action (選択): ブロック(既定) / 許可
+#   fw_domain_outbound_action (選択): 許可(既定) / ブロック
+#   fw_private_state (選択): 有効 / 無効
+#   fw_private_inbound_action (選択): ブロック(既定) / 許可
+#   fw_private_outbound_action (選択): 許可(既定) / ブロック
+#   fw_public_state (選択): 有効 / 無効
+#   fw_public_inbound_action (選択): ブロック(既定) / 許可
+#   fw_public_outbound_action (選択): 許可(既定) / ブロック
+#──────────────────────────────────────────────
 
 - name: Domainプロファイルの有効/無効を設定
   community.windows.win_firewall:
+    # 設定可能な値 → fw_domain_state(選択): 有効 / 無効
     state: "{{ 'enabled' if fw_domain_state == '有効' else 'disabled' }}"
     profiles:
       - Domain
@@ -12,6 +26,7 @@
 # community.windows.win_firewall では未対応のため、別タスクでPowerShellにより設定する
 - name: Domainプロファイルの既定の受信/送信アクションを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → fw_domain_inbound_action(選択): ブロック(既定) / 許可 / fw_domain_outbound_action(選択): 許可(既定) / ブロック
     Set-NetFirewallProfile -Profile Domain -DefaultInboundAction {{ fw_domain_inbound_action }} -DefaultOutboundAction {{ fw_domain_outbound_action }}
   args:
     executable: powershell
@@ -19,6 +34,7 @@
 
 - name: Privateプロファイルの有効/無効を設定
   community.windows.win_firewall:
+    # 設定可能な値 → fw_private_state(選択): 有効 / 無効
     state: "{{ 'enabled' if fw_private_state == '有効' else 'disabled' }}"
     profiles:
       - Private
@@ -27,6 +43,7 @@
 # community.windows.win_firewall では未対応のため、別タスクでPowerShellにより設定する
 - name: Privateプロファイルの既定の受信/送信アクションを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → fw_private_inbound_action(選択): ブロック(既定) / 許可 / fw_private_outbound_action(選択): 許可(既定) / ブロック
     Set-NetFirewallProfile -Profile Private -DefaultInboundAction {{ fw_private_inbound_action }} -DefaultOutboundAction {{ fw_private_outbound_action }}
   args:
     executable: powershell
@@ -34,6 +51,7 @@
 
 - name: Publicプロファイルの有効/無効を設定
   community.windows.win_firewall:
+    # 設定可能な値 → fw_public_state(選択): 有効 / 無効
     state: "{{ 'enabled' if fw_public_state == '有効' else 'disabled' }}"
     profiles:
       - Public
@@ -42,6 +60,7 @@
 # community.windows.win_firewall では未対応のため、別タスクでPowerShellにより設定する
 - name: Publicプロファイルの既定の受信/送信アクションを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → fw_public_inbound_action(選択): ブロック(既定) / 許可 / fw_public_outbound_action(選択): 許可(既定) / ブロック
     Set-NetFirewallProfile -Profile Public -DefaultInboundAction {{ fw_public_inbound_action }} -DefaultOutboundAction {{ fw_public_outbound_action }}
   args:
     executable: powershell

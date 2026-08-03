@@ -1,9 +1,16 @@
 ---
 # 02_コンピューター名 : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   computer_name (文字列): 文字列・環境依存値(例: 要確定)  # ホストごとに異なる値
+#   workgroup_name (文字列): 文字列・環境依存値(例: 要確定)
+#──────────────────────────────────────────────
 
 - name: コンピューター名を設定
   ansible.windows.win_hostname:
+    # 設定可能な値 → computer_name(文字列): 文字列・環境依存値(例: 要確定)
     name: "{{ computer_name }}"
   register: rename_result
 
@@ -13,6 +20,7 @@
 
 - name: 所属ワークグループを設定
   ansible.windows.win_domain_membership:
+    # 設定可能な値 → workgroup_name(文字列): 文字列・環境依存値(例: 要確定)
     workgroup_name: "{{ workgroup_name }}"
     state: workgroup
   register: workgroup_result

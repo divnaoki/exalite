@@ -1,29 +1,44 @@
 ---
 # 16_SNMP_ESMPRO : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   snmp_trap_community (文字列): 文字列・環境依存値(例: 要確定)
+#   snmp_trap_destination (文字列): 文字列・環境依存値(例: 要確定)
+#   snmp_accepted_community_name (文字列): 文字列・環境依存値(例: 要確定)
+#   snmp_accepted_community_rights (選択): NONE(1) / 通知のみ(2) / READ ONLY(4) / READ WRITE(8) / READ CREATE(16) ※実機のレジストリ値で要確認
+#──────────────────────────────────────────────
 
 - name: SNMPトラップ コミュニティ名を追加
   ansible.windows.win_regedit:
+    # 設定可能な値 → snmp_trap_community(文字列): 文字列・環境依存値(例: 要確定)
     path: HKLM:\SYSTEM\CurrentControlSet\Services\SNMP\Parameters\TrapConfiguration\{{ snmp_trap_community }}
     state: present
 
 - name: SNMPトラップ送信先を設定
   ansible.windows.win_regedit:
+    # 設定可能な値 → snmp_trap_community(文字列): 文字列・環境依存値(例: 要確定)
     path: HKLM:\SYSTEM\CurrentControlSet\Services\SNMP\Parameters\TrapConfiguration\{{ snmp_trap_community }}
     name: "1"
+    # 設定可能な値 → snmp_trap_destination(文字列): 文字列・環境依存値(例: 要確定)
     data: "{{ snmp_trap_destination }}"
     type: string
 
 - name: SNMP 受け付けるコミュニティ名を追加
   ansible.windows.win_regedit:
     path: HKLM:\SYSTEM\CurrentControlSet\Services\SNMP\Parameters\ValidCommunities
+    # 設定可能な値 → snmp_accepted_community_name(文字列): 文字列・環境依存値(例: 要確定)
     name: "{{ snmp_accepted_community_name }}"
+    # 設定可能な値 → snmp_accepted_community_rights(選択): NONE(1) / 通知のみ(2) / READ ONLY(4) / READ WRITE(8) / READ CREATE(16) ※実機のレジストリ値で要確認
     data: "{{ snmp_accepted_community_rights }}"
     type: dword
 
 - name: SNMP 受け付けるコミュニティの権利を設定(snmp_accepted_community_nameのタスクと同一)
   ansible.windows.win_regedit:
     path: HKLM:\SYSTEM\CurrentControlSet\Services\SNMP\Parameters\ValidCommunities
+    # 設定可能な値 → snmp_accepted_community_name(文字列): 文字列・環境依存値(例: 要確定)
     name: "{{ snmp_accepted_community_name }}"
+    # 設定可能な値 → snmp_accepted_community_rights(選択): NONE(1) / 通知のみ(2) / READ ONLY(4) / READ WRITE(8) / READ CREATE(16) ※実機のレジストリ値で要確認
     data: "{{ snmp_accepted_community_rights }}"
     type: dword

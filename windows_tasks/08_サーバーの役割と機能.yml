@@ -1,6 +1,14 @@
 ---
 # 08_サーバーの役割と機能 : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   azure_arc_resource_group (文字列): 例: 要確定  # Azure Arc接続先リソースグループ名(閉域網の場合は対象外)
+#   azure_arc_tenant_id (文字列): 例: 要確定  # AzureテナントID
+#   azure_arc_location (文字列): 例: 要確定  # Azureリージョン名
+#   azure_arc_subscription_id (文字列): 例: 要確定  # AzureサブスクリプションID
+#──────────────────────────────────────────────
 
 - name: Windows機能「Storage-Services」を追加
   ansible.windows.win_feature:

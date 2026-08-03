@@ -1,10 +1,16 @@
 ---
 # 14_ソフトウェア制御 : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   uac_notification_level (選択): 0=常に通知しない / 1=資格情報の入力を求める(セキュアデスクトップ) / 2=同意を求める(セキュアデスクトップ) / 3=資格情報の入力を求める / 4=同意を求める / 5=既定(非Windowsバイナリのみ同意を求める)
+#──────────────────────────────────────────────
 
 - name: UAC通知タイミングを設定
   ansible.windows.win_regedit:
     path: HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System
     name: ConsentPromptBehaviorAdmin
+    # 設定可能な値 → uac_notification_level(選択): 0=常に通知しない / 1=資格情報の入力を求める(セキュアデスクトップ) / 2=同意を求める(セキュアデスクトップ) / 3=資格情報の入力を求める / 4=同意を求める / 5=既定(非Windowsバイナリのみ同意を求める)
     data: "{{ uac_notification_level }}"
     type: dword
