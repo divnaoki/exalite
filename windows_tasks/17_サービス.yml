@@ -1,63 +1,133 @@
 ---
 # 17_サービス : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   service_bluetooth_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_bluetooth_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_hyper_v_time_synchronization_service_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_hyper_v_time_synchronization_service_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_microsoft_account_sign_in_assistant_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_microsoft_account_sign_in_assistant_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_program_compatibility_assistant_service_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_program_compatibility_assistant_service_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_quality_windows_audio_video_experience_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_quality_windows_audio_video_experience_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_still_image_acquisition_events_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_still_image_acquisition_events_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_touch_keyboard_and_handwriting_panel_service_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_touch_keyboard_and_handwriting_panel_service_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_windows_audio_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_windows_audio_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_windows_audio_endpoint_builder_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_windows_audio_endpoint_builder_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_windows_biometric_service_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_windows_biometric_service_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_windows_image_acquisition_wia_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_windows_image_acquisition_wia_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_windows_camera_frame_server_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_windows_camera_frame_server_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_windows_camera_frame_server_monitor_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_windows_camera_frame_server_monitor_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#   service_windows_push_notification_service_startup_type_service_name (文字列): 例: 要確定  # 「スタートアップの種類(自動/手動/無効)」の実サービス名(表示名ではなくNameプロパティ)。Get-Service -DisplayName 'スタートアップの種類(自動/手動/無効)' | Select Name で確認
+#   service_windows_push_notification_service_startup_type (選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+#──────────────────────────────────────────────
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Bluetoothサポートサービス」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_bluetooth_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_bluetooth_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_bluetooth_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Bluetoothサポートサービス
+    # 設定可能な値 → service_bluetooth_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_bluetooth_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Hyper-V Time Synchronization Service」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_hyper_v_time_synchronization_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_hyper_v_time_synchronization_service_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_hyper_v_time_synchronization_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Hyper-V Time Synchronization Service
+    # 設定可能な値 → service_hyper_v_time_synchronization_service_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_hyper_v_time_synchronization_service_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Microsoft Account Sign-in Assistant」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_microsoft_account_sign_in_assistant_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_microsoft_account_sign_in_assistant_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_microsoft_account_sign_in_assistant_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Microsoft Account Sign-in Assistant
+    # 設定可能な値 → service_microsoft_account_sign_in_assistant_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_microsoft_account_sign_in_assistant_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Program Compatibility Assistant Service」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_program_compatibility_assistant_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_program_compatibility_assistant_service_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_program_compatibility_assistant_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Program Compatibility Assistant Service
+    # 設定可能な値 → service_program_compatibility_assistant_service_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_program_compatibility_assistant_service_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Quality Windows Audio Video Experience」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_quality_windows_audio_video_experience_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_quality_windows_audio_video_experience_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_quality_windows_audio_video_experience_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Quality Windows Audio Video Experience
+    # 設定可能な値 → service_quality_windows_audio_video_experience_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_quality_windows_audio_video_experience_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Still Image Acquisition Events」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_still_image_acquisition_events_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_still_image_acquisition_events_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_still_image_acquisition_events_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Still Image Acquisition Events
+    # 設定可能な値 → service_still_image_acquisition_events_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_still_image_acquisition_events_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Touch Keyboard and Handwriting Panel Service」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_touch_keyboard_and_handwriting_panel_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_touch_keyboard_and_handwriting_panel_service_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_touch_keyboard_and_handwriting_panel_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Touch Keyboard and Handwriting Panel Service
+    # 設定可能な値 → service_touch_keyboard_and_handwriting_panel_service_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_touch_keyboard_and_handwriting_panel_service_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Windows Audio」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_windows_audio_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_windows_audio_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_windows_audio_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Windows Audio
+    # 設定可能な値 → service_windows_audio_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_windows_audio_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Windows Audio Endpoint Builder」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_windows_audio_endpoint_builder_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_windows_audio_endpoint_builder_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_windows_audio_endpoint_builder_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Windows Audio Endpoint Builder
+    # 設定可能な値 → service_windows_audio_endpoint_builder_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_windows_audio_endpoint_builder_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Windows Biometric Service」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_windows_biometric_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_windows_biometric_service_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_windows_biometric_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Windows Biometric Service
+    # 設定可能な値 → service_windows_biometric_service_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_windows_biometric_service_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Windows Image Acquisition (WIA)」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_windows_image_acquisition_wia_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
+    # 設定可能な値 → service_windows_image_acquisition_wia_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_windows_image_acquisition_wia_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Windows Image Acquisition (WIA)
+    # 設定可能な値 → service_windows_image_acquisition_wia_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
     start_mode: "{{ service_windows_image_acquisition_wia_startup_type }}"
 
-- name: サービス「スタートアップの種類(自動/手動/無効)」のスタートアップ種類を設定
+- name: サービス「Windows カメラ フレーム サーバー」のスタートアップ種類を設定
   ansible.windows.win_service:
-    name: "{{ service_windows_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: スタートアップの種類(自動/手動/無効)
-    start_mode: "{{ service_windows_startup_type }}"
+    # 設定可能な値 → service_windows_camera_frame_server_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_windows_camera_frame_server_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Windows カメラ フレーム サーバー
+    # 設定可能な値 → service_windows_camera_frame_server_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+    start_mode: "{{ service_windows_camera_frame_server_startup_type }}"
+
+- name: サービス「Windows カメラ フレーム サーバー モニター」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    # 設定可能な値 → service_windows_camera_frame_server_monitor_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_windows_camera_frame_server_monitor_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Windows カメラ フレーム サーバー モニター
+    # 設定可能な値 → service_windows_camera_frame_server_monitor_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+    start_mode: "{{ service_windows_camera_frame_server_monitor_startup_type }}"
+
+- name: サービス「Windows プッシュ通知システム サービス」のスタートアップ種類を設定
+  ansible.windows.win_service:
+    # 設定可能な値 → service_windows_push_notification_service_startup_type_service_name(文字列): 例: 要確定
+    name: "{{ service_windows_push_notification_service_startup_type_service_name }}"   # 実際の内部サービス名(Name)を変数化。表示名: Windows プッシュ通知システム サービス
+    # 設定可能な値 → service_windows_push_notification_service_startup_type(選択): 自動(Automatic) / 自動(遅延開始)(Automatic (Delayed Start)) / 手動(Manual) / 無効(Disabled)
+    start_mode: "{{ service_windows_push_notification_service_startup_type }}"

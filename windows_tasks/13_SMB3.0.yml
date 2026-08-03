@@ -1,9 +1,15 @@
 ---
 # 13_SMB3.0 : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   smb_server_enable_multichannel (真偽値): yes / no (true/false)
+#──────────────────────────────────────────────
 
 - name: SMB3.0マルチチャネルを無効化
   ansible.windows.win_shell: |
+    # 設定可能な値 → smb_server_enable_multichannel(真偽値): yes / no (true/false)
     Set-SmbServerConfiguration -EnableMultiChannel ${{ 'true' if smb_server_enable_multichannel else 'false' }} -Force
   args:
     executable: powershell

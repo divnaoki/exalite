@@ -1,9 +1,36 @@
 ---
 # 05_ネットワーク接続 : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   nic1_current_name (文字列): 例: イーサネット  # 変更前のNICアダプター表示名
+#   nic1_display_name (文字列): 文字列・環境依存値(例: イーサネット1)
+#   nic1_ipv4_dhcp_enabled (真偽値): yes / no (true/false)  # 固定IP運用
+#   nic1_ipv4_address (文字列): 文字列・環境依存値(例: 要確定)
+#   nic1_ipv4_prefix_length (数値): 例: 24  # サブネットマスクをCIDR表記に変換した値(例: 255.255.255.0→24)
+#   nic1_ipv4_gateway (文字列): 文字列・環境依存値(例: 要確定)
+#   nic1_ipv4_subnet_mask (文字列): 文字列・環境依存値(例: 要確定)
+#   nic1_dns_auto_obtain (真偽値): yes / no (true/false)
+#   nic1_dns_preferred (文字列): 文字列・環境依存値(例: 要確定)
+#   nic1_dns_alternate (文字列): 文字列・環境依存値(例: 要確定)
+#   nic1_interface_metric_auto (真偽値): yes / no (true/false)
+#   nic1_interface_metric_value (数値): 数値(例: 要確定)  # 自動メトリック無効時のみ使用
+#   nic1_dns_register_address (真偽値): yes / no (true/false)
+#   nic1_wins_address (文字列): 文字列・環境依存値(例: 要確定)
+#   nic1_wins_lmhosts_enabled (真偽値): yes / no (true/false)
+#   nic1_adapter_description (文字列): 例: Microsoft Hyper-V Network Adapter  # WMIのDescriptionプロパティ値(NIC特定用)
+#   nic1_netbios_setting (選択): 既定値(0) / 有効にする(1) / 無効にする(2)
+#   nic1_component_multiplexor_enabled (真偽値): yes / no (true/false)
+#   nic1_component_lldp_enabled (真偽値): yes / no (true/false)
+#   nic1_component_ipv6_enabled (真偽値): yes / no (true/false)  # 閉域網のためIPv6は無効化方針(2.7参照)
+#   nic1_component_lltd_responder_enabled (真偽値): yes / no (true/false)
+#   nic1_component_lltd_mapper_enabled (真偽値): yes / no (true/false)
+#──────────────────────────────────────────────
 
 - name: アダプター名を変更
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_current_name(文字列): 例: イーサネット / nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     Rename-NetAdapter -Name "{{ nic1_current_name }}" -NewName "{{ nic1_display_name }}"
   args:
     executable: powershell
@@ -11,6 +38,7 @@
 
 - name: IPv4アドレス構成(DHCP/固定)
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1) / nic1_ipv4_dhcp_enabled(真偽値): yes / no (true/false)
     Set-NetIPInterface -InterfaceAlias "{{ nic1_display_name }}" -Dhcp {{ 'Enabled' if nic1_ipv4_dhcp_enabled else 'Disabled' }}
   args:
     executable: powershell
@@ -18,8 +46,10 @@
 
 - name: 固定IPアドレスを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     $existing = Get-NetIPAddress -InterfaceAlias "{{ nic1_display_name }}" -AddressFamily IPv4 -ErrorAction SilentlyContinue
     if ($existing) { $existing | Remove-NetIPAddress -Confirm:$false }
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1) / nic1_ipv4_address(文字列): 文字列・環境依存値(例: 要確定)
     New-NetIPAddress -InterfaceAlias "{{ nic1_display_name }}" -IPAddress "{{ nic1_ipv4_address }}" `
       -PrefixLength {{ nic1_ipv4_prefix_length }} -DefaultGateway "{{ nic1_ipv4_gateway }}"
   args:
@@ -30,6 +60,7 @@
   # nic1_ipv4_address のタスクで -PrefixLength として同時設定するため、
   # 本項目単独のタスクはなし。パラメータ変換のみ実施。
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_ipv4_subnet_mask(文字列): 文字列・環境依存値(例: 要確定) / nic1_ipv4_prefix_length(数値): 例: 24
     Write-Host "サブネットマスク {{ nic1_ipv4_subnet_mask }} は PrefixLength {{ nic1_ipv4_prefix_length }} として nic1_ipv4_address のタスクで適用"
   args:
     executable: powershell
@@ -37,6 +68,7 @@
 
 - name: デフォルトゲートウェイ(nic1_ipv4_addressのタスクで同時設定)
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_ipv4_gateway(文字列): 文字列・環境依存値(例: 要確定)
     Write-Host "デフォルトゲートウェイ {{ nic1_ipv4_gateway }} は nic1_ipv4_address のタスクで適用済み"
   args:
     executable: powershell
@@ -44,25 +76,34 @@
 
 - name: DNSサーバーアドレスを設定(手動指定 or DHCP取得に戻す)
   ansible.windows.win_dns_client:
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     adapter_names: "{{ nic1_display_name }}"
+    # 設定可能な値 → nic1_dns_auto_obtain(真偽値): yes / no (true/false) / nic1_dns_preferred(文字列): 文字列・環境依存値(例: 要確定) / nic1_dns_alternate(文字列): 文字列・環境依存値(例: 要確定)
     dns_servers: "{{ [] if nic1_dns_auto_obtain else [nic1_dns_preferred, nic1_dns_alternate] }}"
 
 - name: 優先/代替DNSサーバーを設定(nic1_dns_auto_obtainのタスクで同時設定)
   ansible.windows.win_dns_client:
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     adapter_names: "{{ nic1_display_name }}"
     dns_servers:
+      # 設定可能な値 → nic1_dns_preferred(文字列): 文字列・環境依存値(例: 要確定)
       - "{{ nic1_dns_preferred }}"
+      # 設定可能な値 → nic1_dns_alternate(文字列): 文字列・環境依存値(例: 要確定)
       - "{{ nic1_dns_alternate }}"
 
 - name: 優先/代替DNSサーバーを設定(nic1_dns_preferredのタスクと同一)
   ansible.windows.win_dns_client:
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     adapter_names: "{{ nic1_display_name }}"
     dns_servers:
+      # 設定可能な値 → nic1_dns_preferred(文字列): 文字列・環境依存値(例: 要確定)
       - "{{ nic1_dns_preferred }}"
+      # 設定可能な値 → nic1_dns_alternate(文字列): 文字列・環境依存値(例: 要確定)
       - "{{ nic1_dns_alternate }}"
 
 - name: インターフェイスメトリックの自動/手動を設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1) / nic1_interface_metric_auto(真偽値): yes / no (true/false)
     Set-NetIPInterface -InterfaceAlias "{{ nic1_display_name }}" -AutomaticMetric {{ 'Enabled' if nic1_interface_metric_auto else 'Disabled' }}
   args:
     executable: powershell
@@ -70,6 +111,7 @@
 
 - name: インターフェイスメトリック値を設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1) / nic1_interface_metric_value(数値): 数値(例: 要確定)
     Set-NetIPInterface -InterfaceAlias "{{ nic1_display_name }}" -InterfaceMetric {{ nic1_interface_metric_value }}
   args:
     executable: powershell
@@ -77,6 +119,7 @@
 
 - name: この接続のアドレスをDNSに登録するか設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1) / nic1_dns_register_address(真偽値): yes / no (true/false)
     Set-DnsClient -InterfaceAlias "{{ nic1_display_name }}" -RegisterThisConnectionsAddress ${{ 'true' if nic1_dns_register_address else 'false' }}
   args:
     executable: powershell
@@ -84,7 +127,9 @@
 
 - name: WINSサーバーアドレスを設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     $idx = (Get-NetAdapter -Name "{{ nic1_display_name }}").ifIndex
+    # 設定可能な値 → nic1_wins_address(文字列): 文字列・環境依存値(例: 要確定)
     Set-WinsClientSetting -InterfaceIndex $idx -AddressList "{{ nic1_wins_address }}"
   args:
     executable: powershell
@@ -92,7 +137,9 @@
 
 - name: LMHOSTSの参照有効/無効を設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     $idx = (Get-NetAdapter -Name "{{ nic1_display_name }}").ifIndex
+    # 設定可能な値 → nic1_wins_lmhosts_enabled(真偽値): yes / no (true/false)
     Set-WinsClientSetting -InterfaceIndex $idx -EnableLmHosts ${{ 'true' if nic1_wins_lmhosts_enabled else 'false' }}
   args:
     executable: powershell
@@ -100,7 +147,9 @@
 
 - name: NETBIOS設定(既定値/有効/無効)を設定
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_adapter_description(文字列): 例: Microsoft Hyper-V Network Adapter
     $nic = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "Description='{{ nic1_adapter_description }}'"
+    # 設定可能な値 → nic1_netbios_setting(選択): 既定値(0) / 有効にする(1) / 無効にする(2)
     Invoke-CimMethod -InputObject $nic -MethodName SetTcpipNetbios -Arguments @{TcpipNetbiosOptions={{ nic1_netbios_setting }}}
   args:
     executable: powershell
@@ -108,6 +157,7 @@
 
 - name: Microsoft Network Adapter Multiplexor Protocol の有効/無効
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_component_multiplexor_enabled(真偽値): yes / no (true/false) / nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     {{ 'Enable' if nic1_component_multiplexor_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_implat
   args:
     executable: powershell
@@ -115,6 +165,7 @@
 
 - name: Microsoft LLDPプロトコル ドライバー の有効/無効
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_component_lldp_enabled(真偽値): yes / no (true/false) / nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     {{ 'Enable' if nic1_component_lldp_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_lldp
   args:
     executable: powershell
@@ -122,6 +173,7 @@
 
 - name: インターネットプロトコル バージョン6(TCP/IPv6)の有効/無効
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_component_ipv6_enabled(真偽値): yes / no (true/false) / nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     {{ 'Enable' if nic1_component_ipv6_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_tcpip6
   args:
     executable: powershell
@@ -129,6 +181,7 @@
 
 - name: Link-Layer Topology Discovery Responder の有効/無効
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_component_lltd_responder_enabled(真偽値): yes / no (true/false) / nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     {{ 'Enable' if nic1_component_lltd_responder_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_rspndr
   args:
     executable: powershell
@@ -136,6 +189,7 @@
 
 - name: Link-Layer Topology Discovery Mapper I/O Driver の有効/無効
   ansible.windows.win_shell: |
+    # 設定可能な値 → nic1_component_lltd_mapper_enabled(真偽値): yes / no (true/false) / nic1_display_name(文字列): 文字列・環境依存値(例: イーサネット1)
     {{ 'Enable' if nic1_component_lltd_mapper_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_lltdio
   args:
     executable: powershell

@@ -1,29 +1,49 @@
 ---
 # 03_パフォーマンス : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   pagefile_auto_manage (真偽値): yes / no (true/false)  # 無効化してドライブ毎に個別設定する運用を想定
+#   pagefile_drive (文字列): 例: C:  # ページングファイルを設定する対象ドライブ
+#   pagefile_initial_size_mb (数値): 数値(例: 要確定)  # ドライブ単位で複数行になる想定
+#   pagefile_max_size_mb (数値): 数値(例: 要確定)  # 同上
+#   pagefile_system_managed (真偽値): yes / no (true/false)  # pagefile_modeが「システム管理サイズ」の場合はyes
+#   pagefile_none (真偽値): yes / no (true/false)  # pagefile_modeが「ページングファイルなし」の場合はyes
+#──────────────────────────────────────────────
 
 - name: 全ドライブのページングファイル自動管理を設定
   ansible.windows.win_pagefile:
+    # 設定可能な値 → pagefile_auto_manage(真偽値): yes / no (true/false)
     automatic: "{{ pagefile_auto_manage | bool }}"
 
 - name: ページングファイルの初期サイズを設定
   ansible.windows.win_pagefile:
+    # 設定可能な値 → pagefile_drive(文字列): 例: C:
     drive: "{{ pagefile_drive }}"
+    # 設定可能な値 → pagefile_initial_size_mb(数値): 数値(例: 要確定)
     initial_size: "{{ pagefile_initial_size_mb }}"
+    # 設定可能な値 → pagefile_max_size_mb(数値): 数値(例: 要確定)
     maximum_size: "{{ pagefile_max_size_mb }}"
     override: yes
     automatic: no
 
 - name: ページングファイルの最大サイズを設定
   ansible.windows.win_pagefile:
+    # 設定可能な値 → pagefile_drive(文字列): 例: C:
     drive: "{{ pagefile_drive }}"
+    # 設定可能な値 → pagefile_initial_size_mb(数値): 数値(例: 要確定)
     initial_size: "{{ pagefile_initial_size_mb }}"
+    # 設定可能な値 → pagefile_max_size_mb(数値): 数値(例: 要確定)
     maximum_size: "{{ pagefile_max_size_mb }}"
     override: yes
     automatic: no
 
 - name: ページングファイルのモード(システム管理/なし)を設定
   ansible.windows.win_pagefile:
+    # 設定可能な値 → pagefile_drive(文字列): 例: C:
     drive: "{{ pagefile_drive }}"
+    # 設定可能な値 → pagefile_system_managed(真偽値): yes / no (true/false)
     system_managed: "{{ pagefile_system_managed | bool }}"
+    # 設定可能な値 → pagefile_none(真偽値): yes / no (true/false)
     remove_all: "{{ pagefile_none | default(false) | bool }}"

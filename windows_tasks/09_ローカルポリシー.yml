@@ -1,11 +1,20 @@
 ---
 # 09_ローカルポリシー : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   gpo_windows_update_auto_config (選択): 未構成 / 有効(AUOptions: 2=通知のみ, 3=自動DL後に通知, 4=自動DLしてインストール, 5=ローカル管理者が設定可) / 無効  # 閉域網のため既定は未構成/無効方針
+#   gpo_rds_limit_single_session (選択): 未構成 / 有効(1) / 無効(0)
+#   gpo_rds_active_idle_session_time_limit (選択): 未構成 / 有効(制限時間を分単位で指定)
+#   gpo_rds_idle_session_limit_minutes (数値): 分単位の数値(例: 60)。未構成の場合は空欄
+#──────────────────────────────────────────────
 
 - name: Windows Updateの自動更新構成(ローカルポリシー相当)
   ansible.windows.win_regedit:
     path: HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU
     name: NoAutoUpdate
+    # 設定可能な値 → gpo_windows_update_auto_config(選択): 未構成 / 有効(AUOptions: 2=通知のみ, 3=自動DL後に通知, 4=自動DLしてインストール, 5=ローカル管理者が設定可) / 無効
     data: "{{ gpo_windows_update_auto_config }}"
     type: dword
 
@@ -13,6 +22,7 @@
   ansible.windows.win_regedit:
     path: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services
     name: fSingleSessionPerUser
+    # 設定可能な値 → gpo_rds_limit_single_session(選択): 未構成 / 有効(1) / 無効(0)
     data: "{{ gpo_rds_limit_single_session }}"
     type: dword
 
@@ -20,6 +30,7 @@
   ansible.windows.win_regedit:
     path: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services
     name: MaxIdleTime
+    # 設定可能な値 → gpo_rds_active_idle_session_time_limit(選択): 未構成 / 有効(制限時間を分単位で指定)
     data: "{{ gpo_rds_active_idle_session_time_limit }}"
     type: dword
 
@@ -27,5 +38,6 @@
   ansible.windows.win_regedit:
     path: HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services
     name: MaxIdleTime
+    # 設定可能な値 → gpo_rds_idle_session_limit_minutes(数値): 分単位の数値(例: 60)。未構成の場合は空欄
     data: "{{ (gpo_rds_idle_session_limit_minutes | int) * 60000 }}"
     type: dword

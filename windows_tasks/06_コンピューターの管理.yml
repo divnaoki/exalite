@@ -1,67 +1,98 @@
 ---
 # 06_コンピューターの管理 : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   local_user_admin_must_change_password (真偽値): yes / no (true/false)
+#   local_user_admin_cannot_change_password (真偽値): yes / no (true/false)
+#   local_user_admin_password_never_expires (真偽値): yes / no (true/false)
+#   local_user_admin_account_disabled (真偽値): yes / no (true/false)
+#   local_user_admin_member_of (配列): 配列(複数値をリストで指定)
+#   local_user_guest_must_change_password (真偽値): yes / no (true/false)
+#   local_user_guest_cannot_change_password (真偽値): yes / no (true/false)
+#   local_user_guest_password_never_expires (真偽値): yes / no (true/false)
+#   local_user_guest_account_disabled (真偽値): yes / no (true/false)
+#   local_user_guest_member_of (配列): 配列(複数値をリストで指定)
+#   new_local_user_name (文字列): 文字列・環境依存値(例: 要確定)
+#   new_local_user_password (文字列): 例: 要確定  # 初期パスワード(パスワードポリシーに準拠した値)
+#   new_local_user_fullname (文字列): 文字列・環境依存値(例: 要確定)
+#──────────────────────────────────────────────
 
 - name: Administrator - 次回ログオン時のパスワード変更要否を設定
   ansible.windows.win_user:
     name: Administrator
+    # 設定可能な値 → local_user_admin_must_change_password(真偽値): yes / no (true/false)
     password_expired: "{{ local_user_admin_must_change_password | bool }}"
 
 - name: Administrator - パスワード変更不可設定
   ansible.windows.win_user:
     name: Administrator
+    # 設定可能な値 → local_user_admin_cannot_change_password(真偽値): yes / no (true/false)
     user_cannot_change_password: "{{ local_user_admin_cannot_change_password | bool }}"
 
 - name: Administrator - パスワード無期限設定
   ansible.windows.win_user:
     name: Administrator
+    # 設定可能な値 → local_user_admin_password_never_expires(真偽値): yes / no (true/false)
     password_never_expires: "{{ local_user_admin_password_never_expires | bool }}"
 
 - name: Administrator - アカウント無効化設定
   ansible.windows.win_user:
     name: Administrator
+    # 設定可能な値 → local_user_admin_account_disabled(真偽値): yes / no (true/false)
     account_disabled: "{{ local_user_admin_account_disabled | bool }}"
 
 - name: Administrator - 所属グループを設定
   ansible.windows.win_user:
     name: Administrator
+    # 設定可能な値 → local_user_admin_member_of(配列): 配列(複数値をリストで指定)
     groups: "{{ local_user_admin_member_of }}"
     groups_action: replace
 
 - name: Guest - 次回ログオン時のパスワード変更要否を設定
   ansible.windows.win_user:
     name: Guest
+    # 設定可能な値 → local_user_guest_must_change_password(真偽値): yes / no (true/false)
     password_expired: "{{ local_user_guest_must_change_password | bool }}"
 
 - name: Guest - パスワード変更不可設定
   ansible.windows.win_user:
     name: Guest
+    # 設定可能な値 → local_user_guest_cannot_change_password(真偽値): yes / no (true/false)
     user_cannot_change_password: "{{ local_user_guest_cannot_change_password | bool }}"
 
 - name: Guest - パスワード無期限設定
   ansible.windows.win_user:
     name: Guest
+    # 設定可能な値 → local_user_guest_password_never_expires(真偽値): yes / no (true/false)
     password_never_expires: "{{ local_user_guest_password_never_expires | bool }}"
 
 - name: Guest - アカウント無効化設定
   ansible.windows.win_user:
     name: Guest
+    # 設定可能な値 → local_user_guest_account_disabled(真偽値): yes / no (true/false)
     account_disabled: "{{ local_user_guest_account_disabled | bool }}"
 
 - name: Guest - 所属グループを設定
   ansible.windows.win_user:
     name: Guest
+    # 設定可能な値 → local_user_guest_member_of(配列): 配列(複数値をリストで指定)
     groups: "{{ local_user_guest_member_of }}"
     groups_action: replace
 
 - name: 新規ローカルユーザーを作成
   ansible.windows.win_user:
+    # 設定可能な値 → new_local_user_name(文字列): 文字列・環境依存値(例: 要確定)
     name: "{{ new_local_user_name }}"
+    # 設定可能な値 → new_local_user_password(文字列): 例: 要確定
     password: "{{ new_local_user_password }}"
     state: present
     password_expired: yes
 
 - name: 新規ローカルユーザーのフルネームを設定
   ansible.windows.win_user:
+    # 設定可能な値 → new_local_user_name(文字列): 文字列・環境依存値(例: 要確定)
     name: "{{ new_local_user_name }}"
+    # 設定可能な値 → new_local_user_fullname(文字列): 文字列・環境依存値(例: 要確定)
     fullname: "{{ new_local_user_fullname }}"

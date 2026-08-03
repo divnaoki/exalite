@@ -1,11 +1,21 @@
 ---
 # 11_変更レジストリ : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   reg_wer_dumpcount (数値): 数値(例: 要確定)
+#   reg_wer_dumpfolder (文字列): 文字列・環境依存値(例: 要確定)
+#   reg_wer_dumptype (数値): 数値(例: 要確定)
+#   reg_tcpip6_disabledcomponents (文字列(16進)): 16進文字列(例: ff000000)  # IPv6無効化(2.7と整合)
+#   reg_w32time_eventlogflags (数値): 数値(例: 要確定)
+#──────────────────────────────────────────────
 
 - name: レジストリ値 DumpCount を設定
   ansible.windows.win_regedit:
     path: HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
     name: DumpCount
+    # 設定可能な値 → reg_wer_dumpcount(数値): 数値(例: 要確定)
     data: "{{ reg_wer_dumpcount }}"
     type: dword
 
@@ -13,6 +23,7 @@
   ansible.windows.win_regedit:
     path: HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
     name: DumpFolder
+    # 設定可能な値 → reg_wer_dumpfolder(文字列): 文字列・環境依存値(例: 要確定)
     data: "{{ reg_wer_dumpfolder }}"
     type: dword
 
@@ -20,6 +31,7 @@
   ansible.windows.win_regedit:
     path: HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps
     name: DumpType
+    # 設定可能な値 → reg_wer_dumptype(数値): 数値(例: 要確定)
     data: "{{ reg_wer_dumptype }}"
     type: dword
 
@@ -27,6 +39,7 @@
   ansible.windows.win_regedit:
     path: HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters
     name: DisabledComponents
+    # 設定可能な値 → reg_tcpip6_disabledcomponents(文字列(16進)): 16進文字列(例: ff000000)
     data: "{{ reg_tcpip6_disabledcomponents }}"
     type: dword
 
@@ -34,5 +47,6 @@
   ansible.windows.win_regedit:
     path: HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Config
     name: EventLogFlags
+    # 設定可能な値 → reg_w32time_eventlogflags(数値): 数値(例: 要確定)
     data: "{{ reg_w32time_eventlogflags }}"
     type: dword

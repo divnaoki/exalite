@@ -1,9 +1,23 @@
 ---
 # 15_イベントログ : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   eventlog_application_path (文字列): 文字列・環境依存値(例: 要確定)
+#   eventlog_application_max_size_kb (数値): 数値(例: 要確定)
+#   eventlog_application_retention_policy (選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
+#   eventlog_security_path (文字列): 文字列・環境依存値(例: 要確定)
+#   eventlog_security_max_size_kb (数値): 数値(例: 要確定)
+#   eventlog_security_retention_policy (選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
+#   eventlog_system_path (文字列): 文字列・環境依存値(例: 要確定)
+#   eventlog_system_max_size_kb (数値): 数値(例: 要確定)
+#   eventlog_system_retention_policy (選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
+#──────────────────────────────────────────────
 
 - name: Applicationログの保存パスを変更
   ansible.windows.win_shell: |
+    # 設定可能な値 → eventlog_application_path(文字列): 文字列・環境依存値(例: 要確定)
     wevtutil sl Application /lfn:"{{ eventlog_application_path }}"
   args:
     executable: powershell
@@ -12,17 +26,20 @@
 - name: Applicationログの最大サイズを設定
   ansible.windows.win_eventlog:
     name: Application
+    # 設定可能な値 → eventlog_application_max_size_kb(数値): 数値(例: 要確定)
     maximum_size: "{{ (eventlog_application_max_size_kb | int) * 1024 }}"
     state: present
 
 - name: Applicationログの保持ポリシー(上書き/アーカイブ)を設定
   ansible.windows.win_eventlog:
     name: Application
+    # 設定可能な値 → eventlog_application_retention_policy(選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
     overflow_action: "{{ eventlog_application_retention_policy }}"
     state: present
 
 - name: Securityログの保存パスを変更
   ansible.windows.win_shell: |
+    # 設定可能な値 → eventlog_security_path(文字列): 文字列・環境依存値(例: 要確定)
     wevtutil sl Security /lfn:"{{ eventlog_security_path }}"
   args:
     executable: powershell
@@ -31,17 +48,20 @@
 - name: Securityログの最大サイズを設定
   ansible.windows.win_eventlog:
     name: Security
+    # 設定可能な値 → eventlog_security_max_size_kb(数値): 数値(例: 要確定)
     maximum_size: "{{ (eventlog_security_max_size_kb | int) * 1024 }}"
     state: present
 
 - name: Securityログの保持ポリシー(上書き/アーカイブ)を設定
   ansible.windows.win_eventlog:
     name: Security
+    # 設定可能な値 → eventlog_security_retention_policy(選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
     overflow_action: "{{ eventlog_security_retention_policy }}"
     state: present
 
 - name: Systemログの保存パスを変更
   ansible.windows.win_shell: |
+    # 設定可能な値 → eventlog_system_path(文字列): 文字列・環境依存値(例: 要確定)
     wevtutil sl System /lfn:"{{ eventlog_system_path }}"
   args:
     executable: powershell
@@ -50,11 +70,13 @@
 - name: Systemログの最大サイズを設定
   ansible.windows.win_eventlog:
     name: System
+    # 設定可能な値 → eventlog_system_max_size_kb(数値): 数値(例: 要確定)
     maximum_size: "{{ (eventlog_system_max_size_kb | int) * 1024 }}"
     state: present
 
 - name: Systemログの保持ポリシー(上書き/アーカイブ)を設定
   ansible.windows.win_eventlog:
     name: System
+    # 設定可能な値 → eventlog_system_retention_policy(選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
     overflow_action: "{{ eventlog_system_retention_policy }}"
     state: present

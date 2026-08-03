@@ -1,15 +1,23 @@
 ---
 # 07_日付と時刻 : Ansibleタスク
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+#
+# ── 使用変数一覧 ─────────────────────────────
+#
+#   datetime_admin_group_members (配列): 配列(複数値をリストで指定)
+#   ntp_server_address (文字列): 文字列・環境依存値(例: 要確定)
+#──────────────────────────────────────────────
 
 - name: 日付と時刻の変更を許可するグループへユーザーを追加
   ansible.windows.win_group_membership:
     name: Administrators
+    # 設定可能な値 → datetime_admin_group_members(配列): 配列(複数値をリストで指定)
     members: "{{ datetime_admin_group_members }}"
     state: present
 
 - name: インターネット時刻サーバーとの同期を有効化
   ansible.windows.win_shell: |
+    # 設定可能な値 → ntp_server_address(文字列): 文字列・環境依存値(例: 要確定)
     w32tm /config /syncfromflags:manual /manualpeerlist:"{{ ntp_server_address }}" /reliable:yes /update
     Restart-Service w32time
     w32tm /resync
