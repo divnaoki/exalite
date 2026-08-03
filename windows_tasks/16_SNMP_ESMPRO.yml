@@ -1,6 +1,5 @@
 ---
 # 16_SNMP_ESMPRO : Ansibleタスク
-# Exastro IT Automation V2 / 財務省GSS連携システム
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
 
 - name: SNMPトラップ コミュニティ名を追加

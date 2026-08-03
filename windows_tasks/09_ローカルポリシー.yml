@@ -1,6 +1,5 @@
 ---
 # 09_ローカルポリシー : Ansibleタスク
-# Exastro IT Automation V2 / 財務省GSS連携システム
 # 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
 
 - name: Windows Updateの自動更新構成(ローカルポリシー相当)
