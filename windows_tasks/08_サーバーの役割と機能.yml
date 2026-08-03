@@ -1,0 +1,154 @@
+---
+# 08_サーバーの役割と機能 : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: Windows機能「Storage-Services」を追加
+  ansible.windows.win_feature:
+    name: Storage-Services
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-Framework-Core」を追加
+  ansible.windows.win_feature:
+    name: NET-Framework-Core
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-HTTP-Activation」を追加
+  ansible.windows.win_feature:
+    name: NET-HTTP-Activation
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-Non-HTTP-Activ」を追加
+  ansible.windows.win_feature:
+    name: NET-Non-HTTP-Activ
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-Framework-45-Core」を追加
+  ansible.windows.win_feature:
+    name: NET-Framework-45-Core
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-Framework-45-ASPNET」を追加
+  ansible.windows.win_feature:
+    name: NET-Framework-45-ASPNET
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-WCF-HTTP-Activation45」を追加
+  ansible.windows.win_feature:
+    name: NET-WCF-HTTP-Activation45
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-WCF-TCP-Activation45」を追加
+  ansible.windows.win_feature:
+    name: NET-WCF-TCP-Activation45
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-WCF-TCP-PortSharing45」を追加
+  ansible.windows.win_feature:
+    name: NET-WCF-TCP-PortSharing45
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-WCF-MSMQ-Activation45」を追加
+  ansible.windows.win_feature:
+    name: NET-WCF-MSMQ-Activation45
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「NET-WCF-Pipe-Activation45」を追加
+  ansible.windows.win_feature:
+    name: NET-WCF-Pipe-Activation45
+    state: present
+    include_management_tools: yes
+
+- name: Azure Arcエージェントをインストール
+  ansible.windows.win_shell: |
+    & "C:\AzureConnectedMachineAgent\azcmagent.exe" connect `
+      --resource-group "{{ azure_arc_resource_group }}" `
+      --tenant-id "{{ azure_arc_tenant_id }}" `
+      --location "{{ azure_arc_location }}" `
+      --subscription-id "{{ azure_arc_subscription_id }}"
+  args:
+    executable: powershell
+  changed_when: true
+  # 閉域網の場合は対象外(要確認)
+
+- name: Windows機能「Windows-Defender」を追加
+  ansible.windows.win_feature:
+    name: Windows-Defender
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「SNMP-Service」を追加
+  ansible.windows.win_feature:
+    name: SNMP-Service
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「SNMP-WMI-Provider」を追加
+  ansible.windows.win_feature:
+    name: SNMP-WMI-Provider
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「PowerShell」を追加
+  ansible.windows.win_feature:
+    name: PowerShell
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「PowerShell-V2」を追加
+  ansible.windows.win_feature:
+    name: PowerShell-V2
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「DSC-Service」を追加
+  ansible.windows.win_feature:
+    name: DSC-Service
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「WindowsPowerShellWebAccess」を追加
+  ansible.windows.win_feature:
+    name: WindowsPowerShellWebAccess
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「Windows-Server-Backup」を追加
+  ansible.windows.win_feature:
+    name: Windows-Server-Backup
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「WoW64-Support」を追加
+  ansible.windows.win_feature:
+    name: WoW64-Support
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「XPS-Viewer」を追加
+  ansible.windows.win_feature:
+    name: XPS-Viewer
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「System-DataArchiver」を追加
+  ansible.windows.win_feature:
+    name: System-DataArchiver
+    state: present
+    include_management_tools: yes
+
+- name: Windows機能「RSAT-SNMP」を追加
+  ansible.windows.win_feature:
+    name: RSAT-SNMP
+    state: present
+    include_management_tools: yes

@@ -1,0 +1,19 @@
+---
+# 07_日付と時刻 : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: 日付と時刻の変更を許可するグループへユーザーを追加
+  ansible.windows.win_group_membership:
+    name: Administrators
+    members: "{{ datetime_admin_group_members }}"
+    state: present
+
+- name: インターネット時刻サーバーとの同期を有効化
+  ansible.windows.win_shell: |
+    w32tm /config /syncfromflags:manual /manualpeerlist:"{{ ntp_server_address }}" /reliable:yes /update
+    Restart-Service w32time
+    w32tm /resync
+  args:
+    executable: powershell
+  changed_when: true

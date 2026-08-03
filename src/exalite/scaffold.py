@@ -43,10 +43,13 @@ localhost,Exastro,やあ
     "exalite.yml": """\
 # プロジェクト設定。検証(verify)と本番(prod)のインベントリを定義する。
 # `exalite run <mv> --target verify` / `exalite verify <mv>` / `exalite promote <mv>`
-# で切り替えて使う。verify.ini は `exalite env up` が自動生成する。
+# で切り替えて使う。verify/linux.ini は `exalite env up` が自動生成する。
+# Windows 検証機は Docker では作れないため、実機/VM を verify/windows.ini に
+# WinRM 接続先として登録する（`exalite env check-win` で疎通確認）。
 environments:
   verify:
-    inventory: environments/verify.ini
+    # ディレクトリ指定。配下の linux.ini(自動生成) と windows.ini(手動) が両方読まれる。
+    inventory: environments/verify
   prod:
     inventory: environments/prod.ini
 
@@ -63,6 +66,17 @@ verify_container:
 # グループ名 (linux) は Movement の hosts と一致させます。
 [linux]
 # prod-web01 ansible_host=10.0.0.11 ansible_user=youruser
+
+# Windows 本番機は WinRM で接続する（設定は docs/windows-verify-setup.md 参照）
+# [windows]
+# prod-win01 ansible_host=10.0.0.21
+#
+# [windows:vars]
+# ansible_connection=winrm
+# ansible_user=ansible
+# ansible_port=5985
+# ansible_winrm_transport=ntlm
+# ansible_winrm_scheme=http
 """,
     "movements/ping_linux.yml": """\
 # 検証コンテナ / 本番サーバ (linux グループ) への疎通確認 Movement。
@@ -133,6 +147,44 @@ become: true
     name: httpd
     state: restarted
 """,
+    # ---- Windows 検証機（実機/VM への WinRM） -----------------------------
+    "movements/ping_win.yml": """\
+# Windows 検証機 / 本番機 (windows グループ) への疎通確認 Movement。
+# 事前に environments/verify/windows.ini へ接続先を登録しておく。
+#   exalite env check-win          # WinRM 疎通だけ先に確認
+#   exalite verify ping_win        # Windows 検証機で実行
+name: ping_win
+role: roles/win_sysinfo
+hosts: windows
+""",
+    "roles/win_sysinfo/tasks/main.yml": """\
+---
+- name: 疎通確認 (win_ping)
+  ansible.windows.win_ping:
+
+- name: OS 情報を表示
+  ansible.builtin.debug:
+    msg: >-
+      {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }}
+      ({{ ansible_facts['architecture'] }})
+""",
+    # ---- Conductor（Movement を登録順に実行する作業フロー） ----------------
+    "conductors/setup_all.yml": """\
+# Conductor: 登録した順に Movement を 1 つずつ実行する作業フロー。
+#   exalite conductor list              # 一覧
+#   exalite conductor run setup_all --target verify
+#   exalite conductor run setup_all --mode syntax   # 全ステップ構文チェック
+#
+# ステップ名は Movement の「ファイル名」(movements/<name>.yml の <name>)。
+name: setup_all
+description: 疎通確認 → Web サーバ構築 の順に実行する
+movements:
+  - ping_linux              # 文字列だけなら既定動作（失敗したら以降を中断）
+  - movement: web_linux
+    on_failure: stop        # stop（既定） / continue（失敗しても次へ進む）
+    # target: verify        # このステップだけ実行先を固定したい場合
+""",
     # ---- Ansible 設定（手編集用の外部ファイル） ---------------------------
     "ansible.cfg": """\
 # プロジェクト共通の Ansible 設定。exalite が実行のたびに読み込み、
@@ -175,8 +227,10 @@ verbosity = 3
 """,
     ".gitignore": """\
 .exalite/
-environments/verify/
-environments/verify.ini
+environments/.ssh/
+environments/verify/linux.ini
+# 接続情報（パスワード等）を含みうるため既定では追跡しない
+environments/verify/windows.ini
 """,
 }
 

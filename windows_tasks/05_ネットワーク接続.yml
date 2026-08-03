@@ -1,0 +1,143 @@
+---
+# 05_ネットワーク接続 : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: アダプター名を変更
+  ansible.windows.win_shell: |
+    Rename-NetAdapter -Name "{{ nic1_current_name }}" -NewName "{{ nic1_display_name }}"
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: IPv4アドレス構成(DHCP/固定)
+  ansible.windows.win_shell: |
+    Set-NetIPInterface -InterfaceAlias "{{ nic1_display_name }}" -Dhcp {{ 'Enabled' if nic1_ipv4_dhcp_enabled else 'Disabled' }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: 固定IPアドレスを設定
+  ansible.windows.win_shell: |
+    $existing = Get-NetIPAddress -InterfaceAlias "{{ nic1_display_name }}" -AddressFamily IPv4 -ErrorAction SilentlyContinue
+    if ($existing) { $existing | Remove-NetIPAddress -Confirm:$false }
+    New-NetIPAddress -InterfaceAlias "{{ nic1_display_name }}" -IPAddress "{{ nic1_ipv4_address }}" `
+      -PrefixLength {{ nic1_ipv4_prefix_length }} -DefaultGateway "{{ nic1_ipv4_gateway }}"
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: サブネットマスク(prefixLengthに変換して設定)
+  # nic1_ipv4_address のタスクで -PrefixLength として同時設定するため、
+  # 本項目単独のタスクはなし。パラメータ変換のみ実施。
+  ansible.windows.win_shell: |
+    Write-Host "サブネットマスク {{ nic1_ipv4_subnet_mask }} は PrefixLength {{ nic1_ipv4_prefix_length }} として nic1_ipv4_address のタスクで適用"
+  args:
+    executable: powershell
+  changed_when: false
+
+- name: デフォルトゲートウェイ(nic1_ipv4_addressのタスクで同時設定)
+  ansible.windows.win_shell: |
+    Write-Host "デフォルトゲートウェイ {{ nic1_ipv4_gateway }} は nic1_ipv4_address のタスクで適用済み"
+  args:
+    executable: powershell
+  changed_when: false
+
+- name: DNSサーバーアドレスを設定(手動指定 or DHCP取得に戻す)
+  ansible.windows.win_dns_client:
+    adapter_names: "{{ nic1_display_name }}"
+    dns_servers: "{{ [] if nic1_dns_auto_obtain else [nic1_dns_preferred, nic1_dns_alternate] }}"
+
+- name: 優先/代替DNSサーバーを設定(nic1_dns_auto_obtainのタスクで同時設定)
+  ansible.windows.win_dns_client:
+    adapter_names: "{{ nic1_display_name }}"
+    dns_servers:
+      - "{{ nic1_dns_preferred }}"
+      - "{{ nic1_dns_alternate }}"
+
+- name: 優先/代替DNSサーバーを設定(nic1_dns_preferredのタスクと同一)
+  ansible.windows.win_dns_client:
+    adapter_names: "{{ nic1_display_name }}"
+    dns_servers:
+      - "{{ nic1_dns_preferred }}"
+      - "{{ nic1_dns_alternate }}"
+
+- name: インターフェイスメトリックの自動/手動を設定
+  ansible.windows.win_shell: |
+    Set-NetIPInterface -InterfaceAlias "{{ nic1_display_name }}" -AutomaticMetric {{ 'Enabled' if nic1_interface_metric_auto else 'Disabled' }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: インターフェイスメトリック値を設定
+  ansible.windows.win_shell: |
+    Set-NetIPInterface -InterfaceAlias "{{ nic1_display_name }}" -InterfaceMetric {{ nic1_interface_metric_value }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: この接続のアドレスをDNSに登録するか設定
+  ansible.windows.win_shell: |
+    Set-DnsClient -InterfaceAlias "{{ nic1_display_name }}" -RegisterThisConnectionsAddress ${{ 'true' if nic1_dns_register_address else 'false' }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: WINSサーバーアドレスを設定
+  ansible.windows.win_shell: |
+    $idx = (Get-NetAdapter -Name "{{ nic1_display_name }}").ifIndex
+    Set-WinsClientSetting -InterfaceIndex $idx -AddressList "{{ nic1_wins_address }}"
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: LMHOSTSの参照有効/無効を設定
+  ansible.windows.win_shell: |
+    $idx = (Get-NetAdapter -Name "{{ nic1_display_name }}").ifIndex
+    Set-WinsClientSetting -InterfaceIndex $idx -EnableLmHosts ${{ 'true' if nic1_wins_lmhosts_enabled else 'false' }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: NETBIOS設定(既定値/有効/無効)を設定
+  ansible.windows.win_shell: |
+    $nic = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "Description='{{ nic1_adapter_description }}'"
+    Invoke-CimMethod -InputObject $nic -MethodName SetTcpipNetbios -Arguments @{TcpipNetbiosOptions={{ nic1_netbios_setting }}}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: Microsoft Network Adapter Multiplexor Protocol の有効/無効
+  ansible.windows.win_shell: |
+    {{ 'Enable' if nic1_component_multiplexor_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_implat
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: Microsoft LLDPプロトコル ドライバー の有効/無効
+  ansible.windows.win_shell: |
+    {{ 'Enable' if nic1_component_lldp_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_lldp
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: インターネットプロトコル バージョン6(TCP/IPv6)の有効/無効
+  ansible.windows.win_shell: |
+    {{ 'Enable' if nic1_component_ipv6_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_tcpip6
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: Link-Layer Topology Discovery Responder の有効/無効
+  ansible.windows.win_shell: |
+    {{ 'Enable' if nic1_component_lltd_responder_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_rspndr
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: Link-Layer Topology Discovery Mapper I/O Driver の有効/無効
+  ansible.windows.win_shell: |
+    {{ 'Enable' if nic1_component_lltd_mapper_enabled else 'Disable' }}-NetAdapterBinding -Name "{{ nic1_display_name }}" -ComponentID ms_lltdio
+  args:
+    executable: powershell
+  changed_when: true

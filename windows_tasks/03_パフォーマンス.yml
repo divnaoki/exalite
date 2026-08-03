@@ -1,0 +1,30 @@
+---
+# 03_パフォーマンス : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: 全ドライブのページングファイル自動管理を設定
+  ansible.windows.win_pagefile:
+    automatic: "{{ pagefile_auto_manage | bool }}"
+
+- name: ページングファイルの初期サイズを設定
+  ansible.windows.win_pagefile:
+    drive: "{{ pagefile_drive }}"
+    initial_size: "{{ pagefile_initial_size_mb }}"
+    maximum_size: "{{ pagefile_max_size_mb }}"
+    override: yes
+    automatic: no
+
+- name: ページングファイルの最大サイズを設定
+  ansible.windows.win_pagefile:
+    drive: "{{ pagefile_drive }}"
+    initial_size: "{{ pagefile_initial_size_mb }}"
+    maximum_size: "{{ pagefile_max_size_mb }}"
+    override: yes
+    automatic: no
+
+- name: ページングファイルのモード(システム管理/なし)を設定
+  ansible.windows.win_pagefile:
+    drive: "{{ pagefile_drive }}"
+    system_managed: "{{ pagefile_system_managed | bool }}"
+    remove_all: "{{ pagefile_none | default(false) | bool }}"

@@ -1,0 +1,73 @@
+---
+# 12_NICチーミングIPv6 : Ansibleタスク
+# Exastro IT Automation V2 / 財務省GSS連携システム
+# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+
+- name: NICチーム1を作成
+  community.windows.win_nic_teaming:
+    name: "{{ nicteam1_name }}"
+    members:
+      - "{{ nicteam1_member1 }}"
+      - "{{ nicteam1_member2 }}"
+    teaming_mode: "{{ nicteam1_mode }}"
+    load_balancing_mode: "{{ nicteam1_load_balance_mode }}"
+    state: present
+
+- name: NICチーム1のスタンバイアダプターを設定
+  ansible.windows.win_shell: |
+    Set-NetLbfoTeamMember -Name "{{ nicteam1_standby_adapter }}" -AdministrativeMode Standby -Team "{{ nicteam1_name }}"
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: NICチーム2を作成
+  community.windows.win_nic_teaming:
+    name: "{{ nicteam2_name }}"
+    members:
+      - "{{ nicteam2_member1 }}"
+      - "{{ nicteam2_member2 }}"
+    teaming_mode: "{{ nicteam2_mode }}"
+    load_balancing_mode: "{{ nicteam2_load_balance_mode }}"
+    state: present
+
+- name: NICチーム2のスタンバイアダプターを設定
+  ansible.windows.win_shell: |
+    Set-NetLbfoTeamMember -Name "{{ nicteam2_standby_adapter }}" -AdministrativeMode Standby -Team "{{ nicteam2_name }}"
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: サーバサブネットのインターフェイスメトリックを設定
+  ansible.windows.win_shell: |
+    Set-NetIPInterface -InterfaceAlias "{{ nic_server_subnet_alias }}" -InterfaceMetric {{ nic_metric_server_subnet }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: バックアップストレージ接続LANサブネットのインターフェイスメトリックを設定
+  ansible.windows.win_shell: |
+    Set-NetIPInterface -InterfaceAlias "{{ nic_backup_storage_subnet_alias }}" -InterfaceMetric {{ nic_metric_backup_storage_subnet }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: 運用管理LANサブネットのインターフェイスメトリックを設定
+  ansible.windows.win_shell: |
+    Set-NetIPInterface -InterfaceAlias "{{ nic_management_subnet_alias }}" -InterfaceMetric {{ nic_metric_management_subnet }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: バックアップLANサブネットのインターフェイスメトリックを設定
+  ansible.windows.win_shell: |
+    Set-NetIPInterface -InterfaceAlias "{{ nic_backup_lan_subnet_alias }}" -InterfaceMetric {{ nic_metric_backup_lan_subnet }}
+  args:
+    executable: powershell
+  changed_when: true
+
+- name: 全NICのTCP/IPv6バインディングを無効化
+  ansible.windows.win_shell: |
+    Get-NetAdapter | Disable-NetAdapterBinding -ComponentID ms_tcpip6
+  args:
+    executable: powershell
+  changed_when: true

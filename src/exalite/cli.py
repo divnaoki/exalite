@@ -7,8 +7,9 @@
   run      実行（--target で検証/本番を切替）
   verify   検証環境(Docker)で実行（run --target verify の別名）
   promote  検証環境で実行し、成功したら本番環境へ投入
+  conductor Movement を登録順に実行する作業フロー (list/run)
   watch    ファイル変更を監視して自動で構文チェック（ローカル Sandbox ループ）
-  env      検証用サーバ環境(Docker)の管理 (up/down/status)
+  env      検証用サーバ環境の管理 (up/down/status/check-win)
   web      簡易 WebUI を起動（機器一覧/Movement作成・紐付け/実行）
   init     サンプルプロジェクトを生成
 """
@@ -22,8 +23,17 @@ import sys
 from typing import List, Optional
 
 from . import __version__, env as env_mod
+from .conductor import (
+    DEFAULT_CONDUCTORS_DIR,
+    ConductorError,
+    format_summary,
+    list_conductor_paths,
+    load_conductor,
+    resolve_conductor_path,
+    run_conductor,
+)
 from .config import ConfigError, load_config
-from .movement import Movement, MovementError, load_movement
+from .movement import Movement, MovementError, load_movement, resolve_movement_path
 from .runner import Mode, RunnerError, run
 from .watcher import watch as watch_files
 
@@ -38,27 +48,8 @@ def _inventory_for_target(target: Optional[str]) -> Optional[str]:
     return cfg.inventory_for(target)
 
 
-def _find_movement(name_or_path: str, movements_dir: str) -> str:
-    """Movement 名またはパスから YAML ファイルのパスを解決する。"""
-    if os.path.isfile(name_or_path):
-        return name_or_path
-    for ext in (".yml", ".yaml"):
-        candidate = os.path.join(movements_dir, name_or_path + ext)
-        if os.path.isfile(candidate):
-            return candidate
-        # 拡張子付きで渡されたケース
-        if name_or_path.endswith(ext):
-            candidate2 = os.path.join(movements_dir, name_or_path)
-            if os.path.isfile(candidate2):
-                return candidate2
-    raise MovementError(
-        f"Movement '{name_or_path}' が見つかりません "
-        f"(検索先: {movements_dir}/ とカレントパス)"
-    )
-
-
 def _load(name_or_path: str, movements_dir: str) -> Movement:
-    return load_movement(_find_movement(name_or_path, movements_dir))
+    return load_movement(resolve_movement_path(name_or_path, movements_dir))
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -156,6 +147,76 @@ def _cmd_promote(args: argparse.Namespace) -> int:
     return p.returncode
 
 
+def _cmd_conductor(args: argparse.Namespace) -> int:
+    if args.conductor_action == "list":
+        return _conductor_list(args)
+    return _conductor_run(args)
+
+
+def _conductor_list(args: argparse.Namespace) -> int:
+    paths = list_conductor_paths(args.conductors_dir)
+    if not paths:
+        print(
+            f"Conductor がありません ({args.conductors_dir}/)。"
+            "'exalite init' で雛形を作成できます。"
+        )
+        return 0
+    print(f"{'NAME':<24} {'STEPS':<6} MOVEMENTS")
+    for p in paths:
+        try:
+            cond = load_conductor(p)
+        except ConductorError as exc:
+            print(f"{'(不正)':<24} {'-':<6} {p}  # {exc}")
+            continue
+        flow = " → ".join(
+            s.movement + ("*" if s.on_failure == "continue" else "") for s in cond.steps
+        )
+        print(f"{cond.name:<24} {len(cond.steps):<6} {flow}")
+    print("\n* = on_failure: continue（失敗しても次へ進む）")
+    return 0
+
+
+def _conductor_run(args: argparse.Namespace) -> int:
+    """Conductor のステップを登録順に実行する。"""
+    try:
+        cond = load_conductor(
+            resolve_conductor_path(args.conductor, args.conductors_dir)
+        )
+        mode = Mode(args.mode)
+    except ConductorError as exc:
+        print(f"エラー: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"[exalite] Conductor={cond.name} mode={mode.value} "
+          f"target={args.target or '(既定)'} steps={len(cond.steps)}")
+    if cond.description:
+        print(f"[exalite] {cond.description}")
+
+    def _run_step(mv: Movement, step) -> int:
+        target = step.target or args.target
+        try:
+            inventory_override = _inventory_for_target(target)
+            result = run(
+                mv, mode,
+                force_no_paramsheet=args.no_paramsheet or step.no_paramsheet,
+                inventory_override=inventory_override,
+                target=target,
+                extra_args=args.ansible_args or None,
+            )
+        except (RunnerError, ConfigError) as exc:
+            print(f"エラー: {exc}", file=sys.stderr)
+            return 2
+        return result.returncode
+
+    result = run_conductor(
+        cond, run_step=_run_step, movements_dir=args.movements_dir,
+    )
+    print()
+    for line in format_summary(result):
+        print(line)
+    return result.returncode
+
+
 def _cmd_web(args: argparse.Namespace) -> int:
     try:
         from .web.app import create_app
@@ -178,6 +239,8 @@ def _cmd_env(args: argparse.Namespace) -> int:
             return env_mod.down(base, volumes=not args.keep_volumes)
         elif args.env_action == "status":
             return env_mod.status(base)
+        elif args.env_action == "check-win":
+            return env_mod.check_win(base)
     except env_mod.EnvError as exc:
         print(f"エラー: {exc}", file=sys.stderr)
         return 2
@@ -207,6 +270,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
     dest = os.path.abspath(args.dir)
     created = scaffold(dest)
     created += [os.path.join(dest, p) for p in env_mod.ensure_docker_assets(dest)]
+    # Windows 検証機のインベントリ雛形（実機/VM を WinRM で登録する）
+    env_mod.ensure_windows_inventory(dest)
+    created.append(os.path.join(dest, env_mod._VERIFY_WIN_INI_REL))
     print(f"サンプルを作成しました: {dest}")
     for f in created:
         print(f"  + {os.path.relpath(f, dest)}")
@@ -218,6 +284,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     print(f"  {prefix}exalite env up              # 検証コンテナ(AlmaLinux)を起動")
     print(f"  {prefix}exalite verify ping_linux   # 検証コンテナへ疎通")
     print(f"  {prefix}exalite promote ping_linux  # 検証OKなら本番へ投入")
+    print(f"  {prefix}exalite env check-win       # Windows 検証機(実機/VM)へ WinRM 疎通")
     return 0
 
 
@@ -231,6 +298,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--movements-dir", default=DEFAULT_MOVEMENTS_DIR,
         help=f"Movement ディレクトリ (既定: {DEFAULT_MOVEMENTS_DIR})",
+    )
+    parser.add_argument(
+        "--conductors-dir", default=DEFAULT_CONDUCTORS_DIR,
+        help=f"Conductor ディレクトリ (既定: {DEFAULT_CONDUCTORS_DIR})",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -278,7 +349,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_env_down = env_sub.add_parser("down", help="検証コンテナを停止・破棄")
     p_env_down.add_argument("--keep-volumes", action="store_true", help="ボリュームを残す")
     env_sub.add_parser("status", help="検証コンテナの状態表示")
+    env_sub.add_parser(
+        "check-win", help="Windows 検証機への WinRM 疎通確認 (win_ping)",
+    )
     p_env.set_defaults(func=_cmd_env)
+
+    # conductor: Movement を登録順に実行
+    p_cond = sub.add_parser("conductor", help="Conductor（Movement を登録順に実行）")
+    cond_sub = p_cond.add_subparsers(dest="conductor_action", required=True)
+    cond_sub.add_parser("list", help="Conductor 一覧")
+    p_cond_run = cond_sub.add_parser("run", help="Conductor を登録順に実行")
+    p_cond_run.add_argument("conductor", help="Conductor 名またはファイルパス")
+    p_cond_run.add_argument(
+        "--mode", choices=[m.value for m in Mode], default=Mode.RUN.value,
+        help="各ステップの実行モード (既定: run)",
+    )
+    p_cond_run.add_argument(
+        "--target", default=None,
+        help="実行先環境 (ステップ側の target が優先。例: verify, prod)",
+    )
+    p_cond_run.add_argument(
+        "--no-paramsheet", action="store_true",
+        help="全ステップでパラメータシートを無視",
+    )
+    p_cond.set_defaults(func=_cmd_conductor, target=None, no_paramsheet=False,
+                        mode=Mode.RUN.value)
 
     p_watch = sub.add_parser("watch", help="変更監視して自動チェック")
     p_watch.add_argument("movement", help="Movement 名またはファイルパス")

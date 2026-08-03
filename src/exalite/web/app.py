@@ -1,7 +1,7 @@
 """exalite WebUI の Flask アプリ。
 
 プロジェクトルート（サーバ起動時のカレントディレクトリ）を対象に、
-機器一覧 / Movement 作成・紐付け / 実行 を提供する。
+機器一覧 / Movement 作成・紐付け / Conductor / 実行 を提供する。
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import yaml
 from flask import Flask, jsonify, request, send_from_directory
 
 from .. import env as env_mod
+from ..conductor import ConductorError, list_conductor_paths, load_conductor
 from ..config import ConfigError, load_config
 from ..movement import MovementError, load_movement
 from ..runner import PROJECT_CFG_NAME, Mode, RunnerError
@@ -30,6 +31,7 @@ def create_app(base_dir: Optional[str] = None) -> Flask:
     playbooks_dir = os.path.join(base_dir, "playbooks")
     params_dir = os.path.join(base_dir, "params")
     ansible_cfg_dir = os.path.join(base_dir, "ansible")
+    conductors_dir = os.path.join(base_dir, "conductors")
 
     app = Flask(__name__, static_folder=_STATIC, static_url_path="/static")
     executor = Executor()
@@ -118,6 +120,8 @@ def create_app(base_dir: Optional[str] = None) -> Flask:
                     mv = load_movement(p, base_dir=base_dir)
                     out.append({
                         "name": mv.name,
+                        # Conductor のステップはファイル名で指定するため一緒に返す
+                        "file": os.path.splitext(os.path.basename(p))[0],
                         "kind": "role" if mv.role else "playbook",
                         "target_ref": _rel(mv.role) if mv.role else _rel(mv.playbook),
                         "hosts": mv.hosts,
@@ -189,11 +193,154 @@ def create_app(base_dir: Optional[str] = None) -> Flask:
             return jsonify({"ok": True})
         return jsonify({"error": "not found"}), 404
 
+    # ---- Conductor (Movement を登録順に実行) ---------------------------------
+
+    def _conductor_path(name: str) -> str:
+        return os.path.join(conductors_dir, f"{name}.yml")
+
+    @app.get("/api/conductors")
+    def list_conductors():
+        out = []
+        for p in list_conductor_paths(conductors_dir):
+            try:
+                cond = load_conductor(p, base_dir=base_dir)
+                out.append({
+                    "name": cond.name,
+                    "description": cond.description,
+                    "steps": [
+                        {"movement": s.movement, "on_failure": s.on_failure,
+                         "target": s.target}
+                        for s in cond.steps
+                    ],
+                    "valid": True,
+                })
+            except ConductorError as exc:
+                out.append({"name": os.path.basename(p), "valid": False,
+                            "error": str(exc)})
+        return jsonify(out)
+
+    @app.get("/api/conductors/<name>")
+    def get_conductor(name):
+        path = _conductor_path(name)
+        if not os.path.isfile(path):
+            return jsonify({"error": "not found"}), 404
+        with open(path, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        return jsonify(data)
+
+    @app.post("/api/conductors")
+    def save_conductor():
+        body = request.get_json(force=True) or {}
+        name = (body.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name は必須です"}), 400
+        steps = body.get("movements") or []
+        if not steps:
+            return jsonify({"error": "Movement を 1 つ以上追加してください"}), 400
+
+        doc = {"name": name}
+        if body.get("description"):
+            doc["description"] = body["description"]
+        out_steps = []
+        for step in steps:
+            if isinstance(step, str):
+                out_steps.append(step)
+                continue
+            mv_name = (step.get("movement") or "").strip()
+            if not mv_name:
+                return jsonify({"error": "空の Movement が含まれています"}), 400
+            entry = {"movement": mv_name}
+            if step.get("on_failure") == "continue":
+                entry["on_failure"] = "continue"
+            if step.get("target"):
+                entry["target"] = step["target"]
+            # 既定のままなら文字列形式で簡潔に書き出す
+            out_steps.append(mv_name if list(entry) == ["movement"] else entry)
+        doc["movements"] = out_steps
+
+        os.makedirs(conductors_dir, exist_ok=True)
+        path = _conductor_path(name)
+        with open(path, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(doc, fh, allow_unicode=True, sort_keys=False)
+
+        try:
+            load_conductor(path, base_dir=base_dir)
+        except ConductorError as exc:
+            return jsonify({"error": f"保存しましたが検証に失敗: {exc}",
+                            "saved": _rel(path)}), 400
+        return jsonify({"ok": True, "saved": _rel(path)})
+
+    @app.delete("/api/conductors/<name>")
+    def delete_conductor(name):
+        path = _conductor_path(name)
+        if os.path.isfile(path):
+            os.remove(path)
+            return jsonify({"ok": True})
+        return jsonify({"error": "not found"}), 404
+
+    @app.post("/api/run-conductor")
+    def run_conductor_api():
+        body = request.get_json(force=True) or {}
+        name = body.get("conductor")
+        if not name:
+            return jsonify({"error": "conductor は必須です"}), 400
+        try:
+            cond = load_conductor(_conductor_path(name), base_dir=base_dir)
+            mode = Mode(body.get("mode") or "run")
+        except ConductorError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except ValueError:
+            return jsonify({"error": f"不正な mode: {body.get('mode')}"}), 400
+
+        def _resolve_inventory(target):
+            if not target:
+                return None
+            return load_config(base_dir).inventory_for(target)
+
+        try:
+            info = executor.start_conductor(
+                cond, mode,
+                movements_dir=movements_dir,
+                resolve_inventory=_resolve_inventory,
+                target=body.get("target") or None,
+                force_no_paramsheet=bool(body.get("no_paramsheet")),
+            )
+        except (ConfigError, RunnerError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(info.to_dict())
+
     # ---- 機器一覧 (インベントリ) ---------------------------------------------
 
     def _env_inventory_path(env_name: str) -> Optional[str]:
         cfg = load_config(base_dir)
         return cfg.environments.get(env_name)
+
+    # env up が再生成するため、手編集しても失われるファイル
+    _GENERATED_FILES = {"linux.ini"}
+
+    def _inventory_files(inv: str):
+        """環境のインベントリ（ディレクトリなら配下の *.ini）を列挙する。"""
+        if os.path.isdir(inv):
+            return sorted(
+                os.path.basename(p) for p in glob.glob(os.path.join(inv, "*.ini"))
+            )
+        return [os.path.basename(inv)]
+
+    def _resolve_inventory_file(inv: str, requested: Optional[str]):
+        """編集対象のファイルパスを決める。
+
+        ディレクトリインベントリでは、既定で「自動生成でないファイル」を優先する
+        （linux.ini は env up が上書きするため）。
+        """
+        files = _inventory_files(inv)
+        if not os.path.isdir(inv):
+            return inv, files[0], files
+        if requested and requested in files:
+            chosen = requested
+        else:
+            editable = [f for f in files if f not in _GENERATED_FILES]
+            chosen = (editable or files or ["windows.ini"])[0]
+        return os.path.join(inv, chosen), chosen, files
 
     @app.get("/api/devices/<env_name>")
     def get_devices(env_name):
@@ -203,12 +350,15 @@ def create_app(base_dir: Optional[str] = None) -> Flask:
             return jsonify({"error": str(exc)}), 400
         if not inv:
             return jsonify({"error": f"環境 {env_name} が未定義"}), 404
-        parsed = devmod.parse(inv)
+        path, chosen, files = _resolve_inventory_file(inv, request.args.get("file"))
+        parsed = devmod.parse(path)
         gv = {g: "\n".join(lines).strip() for g, lines in parsed["group_vars_blocks"].items()}
         return jsonify({
             "environment": env_name,
-            "path": _rel(inv),
-            "generated": env_name == "verify",
+            "path": _rel(path),
+            "file": chosen,
+            "files": files,
+            "generated": chosen in _GENERATED_FILES,
             "devices": parsed["devices"],
             "group_vars": gv,
         })
@@ -223,10 +373,11 @@ def create_app(base_dir: Optional[str] = None) -> Flask:
             return jsonify({"error": f"環境 {env_name} が未定義"}), 404
         body = request.get_json(force=True) or {}
         devices = body.get("devices") or []
+        path, chosen, _files = _resolve_inventory_file(inv, body.get("file"))
         # 既存の group:vars と header は保持
-        existing = devmod.parse(inv)
-        devmod.write(inv, devices, existing["group_vars_blocks"], existing["header"])
-        return jsonify({"ok": True, "path": _rel(inv)})
+        existing = devmod.parse(path)
+        devmod.write(path, devices, existing["group_vars_blocks"], existing["header"])
+        return jsonify({"ok": True, "path": _rel(path), "file": chosen})
 
     # ---- 実行 ----------------------------------------------------------------
 

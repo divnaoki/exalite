@@ -1,0 +1,7 @@
+---
+VAR_username: "ansible"
+VAR_password: "Vfr4#mju7klO"
+# sudo 権限を与えるグループ。RedHat 系(AlmaLinux/RHEL)は wheel、Debian 系は sudo。
+# 判定に facts を使うため Movement 側は gather_facts: true のままにする。
+VAR_sudo_group: "{{ 'wheel' if ansible_facts['os_family'] == 'RedHat' else 'sudo' }}"
+

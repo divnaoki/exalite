@@ -36,6 +36,11 @@ ansible.cfg             外部 ansible.cfg のマージ結果（roles_path 等�
 pip install -e .        # 要 Python 3.8+ と Ansible (ansible-playbook)
 ```
 
+> `password_hash` フィルタを使う Role（ユーザー作成など）を実行する場合は、**実行側**に
+> `passlib` も必要です（`pip install passlib`）。macOS の `crypt` は DES しか持たず
+> sha512 にフォールバックできないため、未導入だと
+> `Unable to encrypt nor hash, passlib must be installed` で失敗します。
+
 ## クイックスタート
 
 ```bash
@@ -52,7 +57,7 @@ exalite watch hello         # ① 保存のたびに自動で構文チェック
 
 ## 簡易 WebUI
 
-CLI に加えて、ブラウザから **機器一覧 / Movement 作成・紐付け / 実行** を行える簡易 WebUI を同梱。
+CLI に加えて、ブラウザから **機器一覧 / Movement 作成・紐付け / Conductor / 実行** を行える簡易 WebUI を同梱。
 
 ```bash
 pip install -e '.[web]'     # Flask を導入（未導入の場合）
@@ -67,6 +72,8 @@ exalite web --port 9000     # ポート変更
 - **Movement 作成・紐付け**: 名前・対象グループ(hosts) を決め、**Role/Playbook・パラメータシート・
   ansible.cfg** をドロップダウンで紐付けて保存（= `movements/<name>.yml` を生成）。
   既存 Movement の編集・削除も可能。
+- **Conductor**: Movement を順番に並べた作業フローを作成・編集・実行。↑↓ で順序変更、
+  ステップごとに失敗時の扱い(stop/continue)と実行先を指定できます。
 - **実行 / 実行画面**: Movement・実行先(target)・モード(run/dryrun/syntax) を選んで実行。
   バックグラウンドで `ansible-playbook` が走り、**実行画面にログがリアルタイム表示**（1秒間隔ポーリング）。
   最近の実行履歴からログを再表示できます。
@@ -89,9 +96,9 @@ exalite env down               # 検証コンテナを停止・破棄
 
 - `exalite env up` は `docker/linux/Dockerfile`（**almalinux/9-init** ベース = systemd が PID1。
   RHEL 互換かつサブスクリプション不要で認証なしに pull できる）を
-  ビルドし、`environments/verify/ssh/` に生成した鍵で `127.0.0.1:2222` に SSH 疎通できる
-  検証環境を用意します。インベントリ `environments/verify.ini`（グループ `linux`）も自動生成されます。
-  検証 httpd はホストの `127.0.0.1:8080` にも公開されます。
+  ビルドし、`environments/.ssh/verify/` に生成した鍵で `127.0.0.1:2222` に SSH 疎通できる
+  検証環境を用意します。インベントリ `environments/verify/linux.ini`（グループ `linux`）も
+  自動生成されます。検証 httpd はホストの `127.0.0.1:8080` にも公開されます。
 - **systemd が PID1 で動く**ため、Playbook 中の `ansible.builtin.systemd` / `service` / handler の
   サービス再起動が本番と同じ挙動で検証できます（同梱の `web_linux` が httpd の dnf 導入
   → systemd 起動 → handler 再起動までを実演）。
@@ -105,7 +112,7 @@ exalite env down               # 検証コンテナを停止・破棄
 ```yaml
 environments:
   verify:
-    inventory: environments/verify.ini
+    inventory: environments/verify   # ディレクトリ。linux.ini と windows.ini を共存
   prod:
     inventory: environments/prod.ini
 
@@ -123,10 +130,40 @@ verify_container:
 > `cap_add: SYS_ADMIN` / `/sys/fs/cgroup` マウント等を付与しています（`docker/docker-compose.yml`）。
 > Docker Desktop(cgroup v2) で動作確認済みです。
 
-> **Windows Server について**: Windows Server コンテナは Windows ホスト（Docker の
-> windows-container モード）でのみ動作し、macOS/Linux の Docker では起動できません。
-> 本ツールの検証コンテナは Linux(AlmaLinux) を対象とし、Windows は別ホスト/VM/CI 等で
-> 対応する想定です（`environments/prod.ini` に WinRM 接続のホストを足せば実行自体は可能）。
+## Windows 検証機（実機 / VM を WinRM で）
+
+Windows は Docker で用意せず、**実機/VM を WinRM 接続先として登録**します。検証環境の
+インベントリはディレクトリ形式で、Linux(Docker) と Windows(実機) が共存します。
+
+```
+environments/
+  .ssh/verify/id_ed25519    exalite env up が生成する検証コンテナ用の鍵
+  verify/
+    linux.ini               exalite env up が自動生成（検証コンテナ / グループ linux）
+    windows.ini             手動管理（WinRM 接続先 / グループ windows）
+  prod.ini
+```
+
+```bash
+export EXALITE_WIN_PASSWORD='＜検証用アカウントのパスワード＞'
+exalite env check-win        # WinRM 疎通チェック（ansible.windows.win_ping）
+exalite verify ping_win      # hosts: windows の Movement を Windows 検証機で実行
+```
+
+- Windows 側の準備（WinRM 有効化・アカウント・ファイアウォール）は
+  **[docs/windows-verify-setup.md](docs/windows-verify-setup.md)** に手順があります。
+- `windows.ini` はパスワード等を含みうるため既定で `.gitignore` 済みです。値は環境変数
+  （`lookup('env', ...)`）か Ansible Vault で渡してください。
+- 実行側に `pywinrm` と `ansible.windows` コレクションが必要です。
+
+> **なぜ Windows コンテナを使わないか**: Windows コンテナは Windows ホスト
+> （Docker Desktop の windows-container モード / Pro・Enterprise 以上）でしか動かず、
+> Linux コンテナと**同時に動かせません**。さらに Ansible のコントロールノード自体が
+> Windows ネイティブ非対応で、Windows PC で使う場合も WSL2 の中で動かすことになります。
+> コンテナには systemd/sshd が無く、再起動・ドメイン参加・GUI も不可のため、実機の代替に
+> なりません。詳細な比較は [docs/windows-verify-setup.md](docs/windows-verify-setup.md) に記載。
+> **Windows PC で exalite を動かす場合も、WSL2 + 実機 WinRM の構成なら Linux 検証コンテナと
+> Windows 検証を同時に扱えます。**
 
 ## Movement 設定
 
@@ -162,6 +199,49 @@ web02,8081,web02.example.com
 - セル値は YAML として解釈を試みます（`8080`→int, `true`→bool, それ以外は文字列）。
 - ここで与えた値は host_vars として Role の defaults を上書きします。
 - `--no-paramsheet` を付けると、シートが設定済みでも無視して defaults/vars のみで実行します。
+
+## Conductor（Movement を登録順に実行）
+
+Exastro の Conductor に相当する、**登録した順に Movement を 1 つずつ実行**する作業フロー。
+`conductors/<name>.yml` に書きます。分岐や並列は持たない最小構成です。
+
+```yaml
+name: setup_all
+description: 疎通確認 → ユーザー作成 → パッケージ導入 → Web サーバ構築
+movements:
+  - ping_linux              # 文字列だけなら既定動作（失敗したら以降を中断）
+  - setup_user
+  - movement: install_package
+    on_failure: continue    # 失敗しても次のステップへ進む（既定 stop）
+  - movement: web_linux
+    target: verify          # このステップだけ実行先を固定（省略時は実行時の --target）
+```
+
+```bash
+exalite conductor list                              # 一覧（実行順を表示）
+exalite conductor run setup_all --target verify     # 検証環境へ順に実行
+exalite conductor run setup_all --mode syntax       # 全ステップ構文チェックのみ
+exalite conductor run setup_all --mode dryrun       # 全ステップドライラン
+```
+
+- ステップ名は Movement の **ファイル名**（`movements/<name>.yml` の `<name>`）で指定します
+  （YAML 内の `name:` ではありません）。
+- `on_failure: stop`（既定）のステップが失敗すると、以降のステップは実行せず
+  **スキップ**として記録します。`continue` なら失敗しても次へ進みます。
+- 実行先は `--target` で全体指定、ステップ側の `target:` があればそちらが優先されます。
+- 終了コードは最初に失敗したステップのものを返すので、CI からもそのまま使えます。
+- 最後に結果サマリを表示します。
+
+```
+========== Conductor 結果: setup_all ==========
+  [1] ping_linux               OK
+  [2] setup_user               失敗 (rc=2)
+  [3] install_package          スキップ
+[exalite] Conductor 失敗 (rc=2)
+```
+
+WebUI の **Conductor タブ**からも、Movement をドロップダウンで追加し ↑↓ で並べ替えて
+保存・実行できます。実行ログは 1 本にまとめられ「実行 / 実行画面」タブに表示されます。
 
 ## Ansible 設定（ansible.cfg）
 
@@ -219,17 +299,21 @@ ansible_cfg: ansible/verbose.cfg
 | `exalite run <mv> [--target verify\|prod]` | 実行（環境切替可） |
 | `exalite verify <mv>` | 検証環境(Docker)で実行 |
 | `exalite promote <mv> [-y]` | 検証で実行し成功したら本番へ投入 |
+| `exalite conductor list` | Conductor 一覧（実行順を表示） |
+| `exalite conductor run <cd> [--mode M] [--target T]` | Conductor を登録順に実行 |
 | `exalite env up\|down\|status` | 検証用サーバ環境(Docker)の管理 |
+| `exalite env check-win` | Windows 検証機への WinRM 疎通確認 (win_ping) |
 | `exalite web [--host H] [--port P]` | 簡易 WebUI を起動 |
 | `exalite watch <mv> [--on-change syntax\|dryrun\|run]` | 変更監視して自動実行（既定 syntax） |
 | `exalite init [dir]` | サンプル生成 |
 
-共通オプション：`--movements-dir DIR`（既定 `movements`）、`--no-paramsheet`。
+共通オプション：`--movements-dir DIR`（既定 `movements`）、`--conductors-dir DIR`（既定 `conductors`）、`--no-paramsheet`。
 `--` 以降の引数は `ansible-playbook` にそのまま渡ります（例: `exalite run hello -- -vvv`）。
 
 ## 現状の制約（MVP）
 
-- Ansible-LegacyRole / 単一 Playbook 実行に対応。Pioneer モードや Exastro の CMDB・Web UI・
+- Ansible-LegacyRole / 単一 Playbook 実行に対応。Pioneer モードや Exastro の CMDB・
   代入値自動登録設定の GUI は未対応（本ツールは CLI ＋ Ansible ネイティブ解決に寄せています）。
+- Conductor は逐次実行のみ。並列実行・条件分岐・待ち合わせは未対応。
 - パラメータシートは 1 ホスト 1 行の CSV。Exastro の複数繰り返し（メニュー種別）は未対応。
-- 検証コンテナは Linux(AlmaLinux/systemd)。Windows は別ホスト/VM/CI で対応する想定。
+- 検証コンテナは Linux(AlmaLinux/systemd)。Windows はコンテナ化せず、実機/VM への WinRM 接続で対応します（理由は上記セクション）。

@@ -1,0 +1,13 @@
+---
+- name: Create user
+  ansible.builtin.user:
+    name: "{{ VAR_username }}"
+    # salt を固定しないと実行のたびにハッシュが変わり、毎回 changed になる。
+    # ホスト名を seed にして安定させる（Ansible 公式の推奨パターン）。
+    password: "{{ VAR_password | password_hash('sha512', 65534 | random(seed=inventory_hostname) | string) }}"
+
+- name: Add user to sudo group
+  ansible.builtin.user:
+    name: "{{ VAR_username }}"
+    groups: "{{ VAR_sudo_group }}"
+    append: yes

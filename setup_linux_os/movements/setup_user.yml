@@ -1,0 +1,6 @@
+---
+name: Setup User
+role: roles/setup_user
+hosts: linux
+gather_facts: true
+become: true
