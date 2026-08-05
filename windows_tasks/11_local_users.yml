@@ -14,8 +14,9 @@
 #   - 対象サーバーに存在しないユーザーはエラーにせずスキップする
 #     （create: True のレコードのみ新規作成する）。
 #   - 「所属するグループ」は追加のみ。既存の所属は削除しない。
-#   - 新規作成時のパスワードは server_admin_accounts から
-#     「パラメータシートのユーザー名と同じキー」で取得する。
+#   - 新規作成時のパスワードは、レコードの admin_password、または
+#     server_admin_accounts の「ユーザー名と同じキー」から取得する。
+#     いずれも users には含めず、実行ログに平文が残らないようにしている。
 #   - Ansible は Administrator ではなく各サービスの管理者ユーザーで接続する運用。
 #     そのため Administrator の無効化は他の項目と同じ流れで実行できる。
 #     万一「接続アカウント自身の無効化」が指定された場合は PHASE 1 のガードで中止する。
@@ -46,10 +47,31 @@
     # =================================================================
     # PHASE 0: パラメータシート値の正規化
     # =================================================================
-    - name: "[PREP] パラメータシート値(文字列)を真偽値に正規化"
+    # --- パスワードの退避 ---
+    # レコード内に admin_password があればそれを、無ければ server_admin_accounts の
+    # 同名キーを使う。どちらの持ち方でも動くようにしている。
+    # !!! 重要 !!! パスワードは後続の users には含めない。
+    # 含めるとタスク失敗時のログに item が丸ごと出力され、実行ログに平文で残る。
+    - name: "[PREP] パスワードを取り出して退避"
+      ansible.builtin.set_fact:
+        user_passwords: >-
+          {{ user_passwords | default({}) | combine({
+               item.name: (item.admin_password
+                           | default((server_admin_accounts | default({}))[item.name]
+                                     | default('', true), true))
+             }) }}
+      loop: "{{ local_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      no_log: true
+
+    - name: "[PREP] パラメータシート値(文字列)を真偽値に正規化（パスワードは除外）"
       ansible.builtin.set_fact:
         users: >-
-          {{ users | default([]) + [ item | combine({
+          {{ users | default([]) + [
+             item | dict2items
+                  | rejectattr('key', 'in', ['admin_password', 'password'])
+                  | items2dict | combine({
                'create': (item.create | default(false) | bool),
                'must_change_password': (item.must_change_password | default(false) | bool),
                'cannot_change_password': (item.cannot_change_password | default(false) | bool),
@@ -94,10 +116,23 @@
           $exists = $false
           try {
             $obj = [ADSI]("WinNT://./" + $n + ",user")
-            $null = $obj.UserFlags.Value   # 存在しない場合はここで例外になる
+            # !!! 重要 !!! プロパティを参照するだけでは存在判定にならない。
+            # 存在しないユーザーでも PowerShell の ADSI アダプタが例外を握りつぶし、
+            # $null が返るだけのため「存在する」と誤判定してしまう。
+            # （誤判定すると作成タスクがスキップされ、後続タスクが win_user で
+            #   パスワード未指定のままユーザーを作ろうとして
+            #   「パスワードはパスワードポリシーの要件を満たしていません」で失敗する）
+            # 必ず RefreshCache() で実際にバインドできるかを確認する。
+            $obj.psbase.RefreshCache()
             $exists = $true
           } catch {
             $exists = $false
+            $obj = $null
+          }
+          # 二重の安全策: バインドできても UserFlags が取れない場合は存在しない扱い
+          if ($exists -and ($null -eq $obj.UserFlags.Value)) {
+            $exists = $false
+            $obj = $null
           }
 
           if ($exists) {
@@ -280,12 +315,11 @@
     - name: "[GUARD] 新規作成対象のパスワードが取得できるか検証"
       ansible.builtin.assert:
         that:
-          - ((server_admin_accounts | default({}))[item.name] | default('') | string | length) > 0
+          - (user_passwords[item.name] | default('') | string | length) > 0
         success_msg: "{{ item.name }} : パスワードを取得できました。"
         fail_msg: >-
-          {{ item.name }} : 新規作成にはパスワードが必要ですが、
-          server_admin_accounts に同名のレコードがありません。
-          変数ファイル（またはExastroの機密パラメータ）に
+          {{ item.name }} : 新規作成にはパスワードが必要ですが、パスワードを取得できません。
+          レコードの admin_password、または server_admin_accounts に
           「{{ item.name }}: パスワード」の行があるか確認してください。
       loop: "{{ user_plan }}"
       loop_control:
@@ -297,13 +331,14 @@
     # PHASE 2: 変更（現在値と異なる場合のみ実行）
     # =================================================================
     # --- 新規ユーザーの作成 ---
-    # パスワードは server_admin_accounts から「ユーザー名と同じキー」で取得する。
+    # パスワードは PHASE 0 で退避した user_passwords から取得する
+    # （レコードの admin_password、または server_admin_accounts の同名キー）。
     # update_password: on_create のため、既存ユーザーのパスワードは変更しない。
     # 作成と同時に4項目とグループ所属も設定する。
     - name: "新しいユーザーを作成"
       ansible.windows.win_user:
         name: "{{ item.name }}"
-        password: "{{ server_admin_accounts[item.name] }}"
+        password: "{{ user_passwords[item.name] }}"
         update_password: on_create
         state: present
         fullname: "{{ item.fullname | default('') | ternary(item.fullname | default(''), omit) }}"
@@ -341,19 +376,23 @@
         - user_plan_map[item.name].flags_change
 
     # --- 所属グループの追加 ---
-    # groups_action: add のため、Users など既存の所属はそのまま維持される。
+    # !!! 重要 !!! ここで win_user を使ってはいけない。
+    # win_user は state: present で対象ユーザーが存在しないと「作成」してしまい、
+    # パスワード未指定の作成はパスワードポリシー違反
+    # （パスワードの最短の長さ／複雑性／履歴）で失敗する。
+    # win_group_membership はグループへの追加のみを行い、ユーザーを作らない。
+    # 存在しないユーザーが指定された場合はエラーになるため、取りこぼしに気づける。
+    # state: present のため、Users など既存の所属はそのまま維持される。
     - name: "所属するグループへ追加"
-      ansible.windows.win_user:
-        name: "{{ item.name }}"
+      ansible.windows.win_group_membership:
+        name: "{{ item.1 }}"
+        members:
+          - "{{ item.0.name }}"
         state: present
-        groups: "{{ user_plan_map[item.name].groups_to_add }}"
-        groups_action: "{{ local_user_groups_action | default('add') }}"
-      loop: "{{ users }}"
+      loop: "{{ user_plan | subelements('groups_to_add') }}"
       loop_control:
-        label: "{{ item.name }} -> {{ user_plan_map[item.name].groups_to_add }}"
-      when:
-        - user_plan_map[item.name].exists
-        - (user_plan_map[item.name].groups_to_add | length) > 0
+        label: "{{ item.0.name }} -> {{ item.1 }}"
+      when: item.0.exists
 
     # --- 変更直後の接続性確認 ---
     # ユーザー変更の影響で WinRM の認証が通らなくなるケースを実行中に検知する
@@ -378,10 +417,16 @@
           $exists = $false
           try {
             $obj = [ADSI]("WinNT://./" + $n + ",user")
-            $null = $obj.UserFlags.Value
+            # 存在判定は RefreshCache() で行う（理由は PHASE 1 のコメント参照）
+            $obj.psbase.RefreshCache()
             $exists = $true
           } catch {
             $exists = $false
+            $obj = $null
+          }
+          if ($exists -and ($null -eq $obj.UserFlags.Value)) {
+            $exists = $false
+            $obj = $null
           }
 
           if ($exists) {
@@ -469,6 +514,21 @@
       loop_control:
         label: "{{ item.name }} / {{ item.label | default('') }}"
       when: users_after_map[item.name].Exists | bool
+
+    # create: True のユーザーが実行後も存在しない場合、作成タスクが誤ってスキップ
+    # されている（PHASE 1 の存在判定が誤っている）。黙って見逃さず失敗させる。
+    - name: "[AFTER] 作成対象のユーザーが存在することを確認"
+      ansible.builtin.assert:
+        that:
+          - users_after_map[item.name].Exists | bool
+        success_msg: "{{ item.name }} : ユーザーの存在を確認しました。"
+        fail_msg: >-
+          {{ item.name }} : create が True ですが、実行後もユーザーが存在しません。
+          作成タスクがスキップされていないか（PHASE 1 の Exists 判定）を確認してください。
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.create
 
     # --- スキップした対象の最終報告 ---
     # 存在しないユーザーは PHASE 2 でエラーにせずスキップしている。
