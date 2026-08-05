@@ -28,18 +28,45 @@
 # 稼働中のサービスを新たに追加する場合は、まず1件ずつ実行し
 # [CHECK] タスクで接続が維持されることを確認しながら進めること。
 #
-# 下記は Bluetooth 関連。Server 2022 に実在するのは bthserv のみで、
-# Dependents / DependsOn ともに空＝他サービスへの影響なしを実機で確認済み。
-# 残り3件はクライアントOS用のため Server 2022 には存在せず、スキップされる。
+# 本業から連携された無効化対象14件。
+# 全て検証機(Server 2022)に実在することを確認済み。
+# 「name」はサービス名、コメントは services.msc の表示名。
 target_services:
   - name: "bthserv"              # Bluetooth サポート サービス
     enabled: False
-  - name: "BTAGService"          # Bluetooth Audio Gateway Service（Server には無し）
+  - name: "vmictimesync"         # Hyper-V Time Synchronization Service
     enabled: False
-  - name: "BthAvctpSvc"          # AVCTP service（Server には無し）
+  - name: "wlidsvc"              # Microsoft Account Sign-in Assistant
     enabled: False
-  - name: "BluetoothUserService" # Bluetooth ユーザー サポート サービス（Server には無し）
+  - name: "PcaSvc"               # Program Compatibility Assistant Service
     enabled: False
+  - name: "QWAVE"                # Quality Windows Audio Video Experience
+    enabled: False
+  - name: "WiaRpc"               # Still Image Acquisition Events
+    enabled: False
+  - name: "TabletInputService"   # Touch Keyboard and Handwriting Panel Service
+    enabled: False
+  - name: "Audiosrv"             # Windows Audio
+    enabled: False
+  - name: "AudioEndpointBuilder" # Windows Audio Endpoint Builder
+    enabled: False
+  - name: "WbioSrvc"             # Windows Biometric Service
+    enabled: False
+  - name: "stisvc"               # Windows Image Acquisition (WIA)
+    enabled: False
+  - name: "FrameServer"          # Windows カメラ フレーム サーバー
+    enabled: False
+  - name: "FrameServerMonitor"   # Windows カメラ フレーム サーバー モニター
+    enabled: False
+  # !!! 注意 !!! WpnService は 2026-08-05 の接続断事故で無効化した4サービスの1つ。
+  # 原因は未特定のまま。実行時は復旧手段（RDP/コンソール）を確保してから行うこと。
+  - name: "WpnService"           # Windows プッシュ通知システム サービス
+    enabled: False
+
+# 依存関係メモ（実機確認済み）:
+#   AudioEndpointBuilder <- Audiosrv が依存（両方とも対象なので問題なし）
+#   その他13件は Dependents が空＝他サービスへの影響なし
+#   DependsOn 側に RpcSs 等があるが、これは「対象が依存している先」なので無効化の影響外
 
 # =====================================================================
 # 保護対象サービス（無効化を禁止するガードリスト）
