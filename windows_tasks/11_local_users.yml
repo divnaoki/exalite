@@ -1,0 +1,539 @@
+---
+# =====================================================================
+# 11_ローカルユーザー設定
+#
+# 構成ルール:
+#   PHASE 0  パラメータシート値の正規化
+#   PHASE 1  変更前の設定情報を取得（必ず取得）
+#   PHASE 2  現在値と異なる場合のみ変更を実行（冪等）
+#   PHASE 3  変更後の設定情報を再取得して確認
+#   PHASE 4  接続アカウント自身の無効化（許可された場合のみ最後に実行）
+#
+# 前提:
+#   - Exastro のパラメータシートからユーザーごとに各項目の True/False が渡る。
+#   - 値は文字列で渡るため PHASE 0 で `| bool` を通して真偽値に正規化している。
+#   - 対象サーバーに存在しないユーザーはエラーにせずスキップする
+#     （create: True のレコードのみ新規作成する）。
+#   - 「所属するグループ」は追加のみ。既存の所属は削除しない。
+#
+# 【4つのチェックボックスと実体の対応】
+#   ユーザーは次回ログオン時にパスワードの変更が必要 : PasswordExpired = 1
+#   ユーザーはパスワードを変更できない               : UserFlags & 0x0040
+#   パスワードを無期限にする                         : UserFlags & 0x10000
+#   アカウントを無効にする                           : UserFlags & 0x0002
+#   情報取得は Get-LocalUser では上記4つを全て取得できないため ADSI(WinNT) を使用する。
+#
+# 設定値は vars/11_local_users.yml で定義。
+# シェル実行は win_powershell ではなく win_shell を使用（本業環境に合わせる）。
+# ユーザー操作は専用モジュール win_user を使用（前後取得と when は同様に実施）。
+#
+# 【対象範囲】
+# 本 Playbook はローカルユーザーとグループ所属のみを扱う。
+# 同じシートに並ぶ「インターネット時刻設定」は 07_日付と時刻.yml が担当。
+# =====================================================================
+- name: "11_ローカルユーザー設定"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/11_local_users.yml
+
+  tasks:
+    # =================================================================
+    # PHASE 0: パラメータシート値の正規化
+    # =================================================================
+    - name: "[PREP] パラメータシート値(文字列)を真偽値に正規化"
+      ansible.builtin.set_fact:
+        users: >-
+          {{ users | default([]) + [ item | combine({
+               'create': (item.create | default(false) | bool),
+               'must_change_password': (item.must_change_password | default(false) | bool),
+               'cannot_change_password': (item.cannot_change_password | default(false) | bool),
+               'password_never_expires': (item.password_never_expires | default(false) | bool),
+               'account_disabled': (item.account_disabled | default(false) | bool),
+               'groups': (item.groups | default([]))
+             }) ] }}
+      loop: "{{ local_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # 「無期限にする」と「次回ログオン時に変更が必要」は Windows 側で同時に
+    # 成立しない（無期限にするとパスワード期限切れ状態を作れない）。
+    # 指定が矛盾していると win_user が失敗するため、変更前に検出して中止する。
+    - name: "[GUARD] 排他となる指定の組み合わせを検証"
+      ansible.builtin.assert:
+        that:
+          - not ((item.password_never_expires | bool) and (item.must_change_password | bool))
+        success_msg: "{{ item.name }} : 指定に矛盾はありません。"
+        fail_msg: >-
+          {{ item.name }} : 「パスワードを無期限にする」と
+          「次回ログオン時にパスワードの変更が必要」は同時に True にできません。
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得
+    # =================================================================
+    # Get-LocalUser は「次回ログオン時にパスワードの変更が必要」を返さないため
+    # ADSI(WinNT) の UserFlags / PasswordExpired を直接読む。
+    # 存在しないユーザーはプロパティ参照で例外になるので Exists=false として返す。
+    # ※ Windows PowerShell 5.1 の ConvertTo-Json は非 ASCII を \uXXXX に
+    #   エスケープするため、日本語のフルネーム/説明でも文字化けしない。
+    - name: "[BEFORE] 対象ユーザーの現在状態を取得"
+      ansible.windows.win_shell: |
+        $names = '{{ users | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+
+        $list = @()
+        foreach ($n in $names) {
+          $obj = $null
+          $exists = $false
+          try {
+            $obj = [ADSI]("WinNT://./" + $n + ",user")
+            $null = $obj.UserFlags.Value   # 存在しない場合はここで例外になる
+            $exists = $true
+          } catch {
+            $exists = $false
+          }
+
+          if ($exists) {
+            $flags = [int]$obj.UserFlags.Value
+            # PasswordExpired が取得できない環境では「変更不要」とみなす
+            $mustChange = $false
+            try { $mustChange = ([int]$obj.PasswordExpired.Value -eq 1) } catch { $mustChange = $false }
+            # 所属グループの列挙。取得できない場合も処理は継続する
+            $groups = @()
+            try {
+              $groups = @($obj.psbase.Invoke("Groups") | ForEach-Object {
+                $_.GetType().InvokeMember("Name", "GetProperty", $null, $_, $null)
+              })
+            } catch { $groups = @() }
+
+            $list += [PSCustomObject][ordered]@{
+              Name                 = $n
+              Exists               = $true
+              FullName             = [string]$obj.FullName.Value
+              Description          = [string]$obj.Description.Value
+              MustChangePassword   = $mustChange                        # PasswordExpired = 1
+              CannotChangePassword = [bool]($flags -band 0x0040)        # UF_PASSWD_CANT_CHANGE
+              PasswordNeverExpires = [bool]($flags -band 0x10000)       # UF_DONT_EXPIRE_PASSWD
+              Disabled             = [bool]($flags -band 0x0002)        # UF_ACCOUNTDISABLE
+              Groups               = $groups
+              UserFlags            = $flags
+            }
+          } else {
+            $list += [PSCustomObject][ordered]@{
+              Name                 = $n
+              Exists               = $false
+              FullName             = $null
+              Description          = $null
+              MustChangePassword   = $false
+              CannotChangePassword = $false
+              PasswordNeverExpires = $false
+              Disabled             = $false
+              Groups               = @()
+              UserFlags            = $null
+            }
+          }
+        }
+
+        # 接続に使用しているアカウント（自分自身を無効化する事故を防ぐため）。
+        # ドメイン付きの形式で返るため、比較用にドメイン部を落とした小文字の名前も
+        # 併せて返す（YAML/Jinja 側での区切り文字のエスケープを避けるため）。
+        # 区切り文字は [char]92 で表現する。この Playbook 内（コメントを含む）に
+        # 区切り文字そのものを書くと Ansible の引数分割でクォート不一致と
+        # 判定され、Playbook のパースに失敗するため。
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $r = [ordered]@{
+          ConnectedAs      = $me
+          ConnectedAccount = $me.Split([char]92)[-1].ToLower()
+          Users            = @($list)
+        }
+        ConvertTo-Json -InputObject $r -Compress -Depth 5
+      args:
+        executable: powershell
+      changed_when: false
+      register: users_before_raw
+
+    - name: "[BEFORE] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        users_before: "{{ (users_before_raw.stdout | from_json).Users }}"
+        connected_as: "{{ (users_before_raw.stdout | from_json).ConnectedAs }}"
+        # ドメイン部を除いた小文字のアカウント名（接続アカウント判定に使用）
+        connected_account: "{{ (users_before_raw.stdout | from_json).ConnectedAccount }}"
+
+    - name: "[BEFORE] ユーザー名で引ける辞書を作成"
+      ansible.builtin.set_fact:
+        users_before_map: "{{ dict(users_before | map(attribute='Name') | zip(users_before)) }}"
+
+    - name: "[BEFORE] 現在状態を表示"
+      ansible.builtin.debug:
+        var: users_before
+
+    - name: "[BEFORE] 接続アカウントを表示"
+      ansible.builtin.debug:
+        msg: "Ansible の接続アカウント: {{ connected_as }}"
+
+    # --- 実行計画の作成 ---
+    # 「指定値」と「現在値」を突き合わせ、ユーザーごとに何を変更するか確定させる。
+    #   create_needed  : create: True かつ 未作成          -> 新規作成する
+    #   flags_change   : 4項目のいずれかが現在値と異なる    -> 変更する
+    #   groups_to_add  : 未所属の指定グループ              -> 追加する
+    #   disable_now    : 無効化が必要（接続アカウント以外） -> PHASE 2 で無効化
+    #   disable_defer  : 無効化が必要（接続アカウント自身） -> PHASE 4 で無効化
+    #   disable_skip   : 無効化が必要だが許可されていない   -> 実行しない（警告）
+    - name: "[PLAN] ユーザーごとの実行内容を確定"
+      ansible.builtin.set_fact:
+        user_plan: >-
+          {{ user_plan | default([]) + [ {
+               'name': item.name,
+               'label': item.label | default(''),
+               'exists': users_before_map[item.name].Exists | bool,
+               'create_needed': (item.create and not (users_before_map[item.name].Exists | bool)),
+               'skip_missing': ((not item.create) and not (users_before_map[item.name].Exists | bool)),
+               'is_connection_account': (item.name | lower == connected_account),
+               'need_must_change':
+                 ((users_before_map[item.name].MustChangePassword | bool) != item.must_change_password),
+               'need_cannot_change':
+                 ((users_before_map[item.name].CannotChangePassword | bool) != item.cannot_change_password),
+               'need_never_expires':
+                 ((users_before_map[item.name].PasswordNeverExpires | bool) != item.password_never_expires),
+               'need_disable':
+                 ((users_before_map[item.name].Disabled | bool) != item.account_disabled),
+               'flags_change': (
+                 ((users_before_map[item.name].MustChangePassword | bool) != item.must_change_password)
+                 or ((users_before_map[item.name].CannotChangePassword | bool) != item.cannot_change_password)
+                 or ((users_before_map[item.name].PasswordNeverExpires | bool) != item.password_never_expires)
+               ),
+               'groups_to_add': (
+                 dict(item.groups | map('lower') | zip(item.groups)) | dict2items
+                 | rejectattr('key', 'in', (users_before_map[item.name].Groups | map('lower') | list))
+                 | map(attribute='value') | list
+               ),
+               'current': {
+                 'must_change_password': users_before_map[item.name].MustChangePassword | bool,
+                 'cannot_change_password': users_before_map[item.name].CannotChangePassword | bool,
+                 'password_never_expires': users_before_map[item.name].PasswordNeverExpires | bool,
+                 'account_disabled': users_before_map[item.name].Disabled | bool,
+                 'groups': users_before_map[item.name].Groups
+               },
+               'desired': {
+                 'must_change_password': item.must_change_password,
+                 'cannot_change_password': item.cannot_change_password,
+                 'password_never_expires': item.password_never_expires,
+                 'account_disabled': item.account_disabled,
+                 'groups': item.groups
+               }
+             } ] }}
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "[PLAN] ユーザー名で引ける辞書を作成"
+      ansible.builtin.set_fact:
+        user_plan_map: "{{ dict(user_plan | map(attribute='name') | zip(user_plan)) }}"
+
+    - name: "[PLAN] 処理内容の内訳を表示"
+      ansible.builtin.debug:
+        msg:
+          - "新規作成する           : {{ user_plan | selectattr('create_needed') | map(attribute='name') | list }}"
+          - "プロパティを変更する   : {{ user_plan | selectattr('exists') | selectattr('flags_change') | map(attribute='name') | list }}"
+          - "グループへ追加する     : {{ user_plan | selectattr('groups_to_add') | map(attribute='name') | zip(user_plan | selectattr('groups_to_add') | map(attribute='groups_to_add')) | list }}"
+          - "アカウントを無効化する : {{ user_plan | selectattr('exists') | selectattr('need_disable') | map(attribute='name') | list }}"
+          - "存在しないためスキップ : {{ user_plan | selectattr('skip_missing') | map(attribute='name') | list }}"
+
+    - name: "[PLAN] 変更前後の値を表示"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.name }} / {{ item.label }} :
+          現在={{ item.current }} -> 指定={{ item.desired }}
+      loop: "{{ user_plan }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # 新規作成にはパスワードが必須。未指定のまま実行すると win_user が失敗するため
+    # 1件も変更しないうちに中止する。値そのものは no_log で出力しない。
+    - name: "[GUARD] 新規作成対象のパスワードが指定されているか検証"
+      ansible.builtin.assert:
+        that:
+          - (local_user_passwords[item.name] | default('') | string | length) > 0
+        success_msg: "{{ item.name }} : パスワードが指定されています。"
+        fail_msg: >-
+          {{ item.name }} : 新規作成するにはパスワードの指定が必要です。
+          Exastro の機密パラメータ等で local_user_passwords.{{ item.name }} を渡してください。
+      loop: "{{ user_plan }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.create_needed
+      no_log: true
+
+    # =================================================================
+    # PHASE 2: 変更（現在値と異なる場合のみ実行）
+    # =================================================================
+    # --- 新規ユーザーの作成 ---
+    # update_password: on_create のため、既存ユーザーのパスワードは変更しない。
+    # 作成と同時に4項目とグループ所属も設定する。
+    - name: "新しいユーザーを作成"
+      ansible.windows.win_user:
+        name: "{{ item.name }}"
+        password: "{{ local_user_passwords[item.name] }}"
+        update_password: on_create
+        state: present
+        fullname: "{{ item.fullname | default('') | ternary(item.fullname | default(''), omit) }}"
+        description: "{{ item.description | default('') | ternary(item.description | default(''), omit) }}"
+        password_expired: "{{ item.must_change_password }}"
+        user_cannot_change_password: "{{ item.cannot_change_password }}"
+        password_never_expires: "{{ item.password_never_expires }}"
+        account_disabled: "{{ item.account_disabled }}"
+        groups: "{{ item.groups }}"
+        groups_action: "{{ local_user_groups_action | default('add') }}"
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }} / {{ item.label | default('') }}"
+      when: >-
+        user_plan_map[item.name].create_needed
+      no_log: true
+
+    # --- 既存ユーザーのプロパティ変更 ---
+    # 「アカウントを無効にする」はここでは扱わない（接続断を避けるため後続タスクで実施）。
+    - name: "既存ユーザーのプロパティを変更（無効化を除く3項目）"
+      ansible.windows.win_user:
+        name: "{{ item.name }}"
+        state: present
+        password_expired: "{{ item.must_change_password }}"
+        user_cannot_change_password: "{{ item.cannot_change_password }}"
+        password_never_expires: "{{ item.password_never_expires }}"
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }} / {{ item.label | default('') }}"
+      when:
+        - user_plan_map[item.name].exists
+        - user_plan_map[item.name].flags_change
+
+    # --- 所属グループの追加 ---
+    # groups_action: add のため、Users など既存の所属はそのまま維持される。
+    - name: "所属するグループへ追加"
+      ansible.windows.win_user:
+        name: "{{ item.name }}"
+        state: present
+        groups: "{{ user_plan_map[item.name].groups_to_add }}"
+        groups_action: "{{ local_user_groups_action | default('add') }}"
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }} -> {{ user_plan_map[item.name].groups_to_add }}"
+      when:
+        - user_plan_map[item.name].exists
+        - (user_plan_map[item.name].groups_to_add | length) > 0
+
+    # --- アカウントの無効化（接続アカウント以外）---
+    - name: "アカウントを無効化（接続アカウント以外）"
+      ansible.windows.win_user:
+        name: "{{ item.name }}"
+        state: present
+        account_disabled: "{{ item.account_disabled }}"
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }} / {{ item.label | default('') }}"
+      when:
+        - user_plan_map[item.name].exists
+        - user_plan_map[item.name].need_disable
+        - not user_plan_map[item.name].is_connection_account
+
+    # --- 変更直後の接続性確認 ---
+    # ユーザー変更の影響で WinRM の認証が通らなくなるケースを実行中に検知する
+    # （次回実行まで気づけない事態を防ぐ）。
+    - name: "[CHECK] 変更後も WinRM 接続が維持されているか確認"
+      ansible.windows.win_ping:
+      register: conn_check
+      retries: 3
+      delay: 10
+      until: conn_check is succeeded
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を再取得（確認）
+    # =================================================================
+    - name: "[AFTER] 対象ユーザーの状態を再取得"
+      ansible.windows.win_shell: |
+        $names = '{{ users | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+
+        $list = @()
+        foreach ($n in $names) {
+          $obj = $null
+          $exists = $false
+          try {
+            $obj = [ADSI]("WinNT://./" + $n + ",user")
+            $null = $obj.UserFlags.Value
+            $exists = $true
+          } catch {
+            $exists = $false
+          }
+
+          if ($exists) {
+            $flags = [int]$obj.UserFlags.Value
+            $mustChange = $false
+            try { $mustChange = ([int]$obj.PasswordExpired.Value -eq 1) } catch { $mustChange = $false }
+            $groups = @()
+            try {
+              $groups = @($obj.psbase.Invoke("Groups") | ForEach-Object {
+                $_.GetType().InvokeMember("Name", "GetProperty", $null, $_, $null)
+              })
+            } catch { $groups = @() }
+
+            $list += [PSCustomObject][ordered]@{
+              Name                 = $n
+              Exists               = $true
+              FullName             = [string]$obj.FullName.Value
+              Description          = [string]$obj.Description.Value
+              MustChangePassword   = $mustChange
+              CannotChangePassword = [bool]($flags -band 0x0040)
+              PasswordNeverExpires = [bool]($flags -band 0x10000)
+              Disabled             = [bool]($flags -band 0x0002)
+              Groups               = $groups
+              UserFlags            = $flags
+            }
+          } else {
+            $list += [PSCustomObject][ordered]@{
+              Name                 = $n
+              Exists               = $false
+              FullName             = $null
+              Description          = $null
+              MustChangePassword   = $false
+              CannotChangePassword = $false
+              PasswordNeverExpires = $false
+              Disabled             = $false
+              Groups               = @()
+              UserFlags            = $null
+            }
+          }
+        }
+        ConvertTo-Json -InputObject @($list) -Compress -Depth 5
+      args:
+        executable: powershell
+      changed_when: false
+      register: users_after_raw
+
+    - name: "[AFTER] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        users_after: "{{ users_after_raw.stdout | from_json }}"
+
+    - name: "[AFTER] ユーザー名で引ける辞書を作成"
+      ansible.builtin.set_fact:
+        users_after_map: "{{ dict(users_after | map(attribute='Name') | zip(users_after)) }}"
+
+    - name: "[AFTER] 変更後の状態を表示"
+      ansible.builtin.debug:
+        var: users_after
+
+    # 接続アカウント自身の無効化は PHASE 4 に回している（または実行しない）ため、
+    # ここでは「アカウントを無効にする」の一致確認から除外する。
+    - name: "[AFTER] 指定値どおりに設定されたことを確認"
+      ansible.builtin.assert:
+        that:
+          - (users_after_map[item.name].MustChangePassword | bool) == item.must_change_password
+          - (users_after_map[item.name].CannotChangePassword | bool) == item.cannot_change_password
+          - (users_after_map[item.name].PasswordNeverExpires | bool) == item.password_never_expires
+          - >-
+            ((users_after_map[item.name].Disabled | bool) == item.account_disabled)
+            or (user_plan_map[item.name].is_connection_account)
+          - >-
+            (item.groups | map('lower') | list
+             | difference(users_after_map[item.name].Groups | map('lower') | list) | length) == 0
+        success_msg: >-
+          {{ item.name }} : 指定値と一致しました
+          (次回変更={{ users_after_map[item.name].MustChangePassword }},
+          変更不可={{ users_after_map[item.name].CannotChangePassword }},
+          無期限={{ users_after_map[item.name].PasswordNeverExpires }},
+          無効={{ users_after_map[item.name].Disabled }},
+          所属={{ users_after_map[item.name].Groups }})。
+        fail_msg: >-
+          {{ item.name }} : 指定値と一致しません
+          (実際: 次回変更={{ users_after_map[item.name].MustChangePassword }},
+          変更不可={{ users_after_map[item.name].CannotChangePassword }},
+          無期限={{ users_after_map[item.name].PasswordNeverExpires }},
+          無効={{ users_after_map[item.name].Disabled }},
+          所属={{ users_after_map[item.name].Groups }}
+          / 指定: {{ user_plan_map[item.name].desired }})。
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }} / {{ item.label | default('') }}"
+      when: users_after_map[item.name].Exists | bool
+
+    # --- スキップした対象の最終報告 ---
+    # 存在しないユーザーは PHASE 2 でエラーにせずスキップしている。
+    # 見落とすと「設定したつもり」になるため、0件でも必ず件数を出力する。
+    - name: "[AFTER] 存在しないためスキップしたユーザーを報告（件数）"
+      ansible.builtin.debug:
+        msg: >-
+          対象サーバーに存在しないためスキップしたユーザー: {{ user_missing | length }} 件
+          {{ user_missing if (user_missing | length) > 0 else '（該当なし：指定したユーザーは全て対象サーバーに存在しました）' }}
+      vars:
+        user_missing: "{{ users_after | rejectattr('Exists') | map(attribute='Name') | list }}"
+
+    - name: "[AFTER] 存在しないためスキップしたユーザーを報告（明細）"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.name }} / {{ item.label | default('') }} :
+          対象サーバーに存在せず、create も False のためスキップしました。
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not (users_after_map[item.name].Exists | bool)
+
+    # =================================================================
+    # PHASE 4: 接続アカウント自身の無効化（最後に実行）
+    # =================================================================
+    # 実行した時点でこの資格情報では以後接続できなくなるため、
+    # 全ての設定と確認が終わったあとの最終タスクとして配置している。
+    - name: "[FINAL] 接続アカウントの無効化前に代替の管理者アカウントを検証"
+      ansible.builtin.assert:
+        that:
+          - >-
+            (users_after | selectattr('Exists') | rejectattr('Disabled')
+             | rejectattr('Name', 'eq', item.name)
+             | selectattr('Groups', 'contains', 'Administrators')
+             | list | length) > 0
+        success_msg: >-
+          有効な代替管理者アカウントを確認しました:
+          {{ users_after | selectattr('Exists') | rejectattr('Disabled')
+             | rejectattr('Name', 'eq', item.name)
+             | selectattr('Groups', 'contains', 'Administrators')
+             | map(attribute='Name') | list }}
+        fail_msg: >-
+          {{ item.name }} を無効化すると有効な管理者アカウントが無くなります。
+          代替の管理者アカウント（Administrators 所属かつ有効）を作成してから再実行してください。
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - user_plan_map[item.name].is_connection_account
+        - user_plan_map[item.name].need_disable
+        - allow_disable_connection_account | default(false) | bool
+
+    - name: "[FINAL] 接続アカウント自身を無効化（allow_disable_connection_account が True の場合のみ）"
+      ansible.windows.win_user:
+        name: "{{ item.name }}"
+        state: present
+        account_disabled: true
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }} / {{ item.label | default('') }}"
+      when:
+        - user_plan_map[item.name].is_connection_account
+        - user_plan_map[item.name].need_disable
+        - allow_disable_connection_account | default(false) | bool
+
+    - name: "[FINAL] 接続アカウントの無効化をスキップしたことを報告"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.name }} は Ansible の接続アカウント自身のため、無効化をスキップしました。
+          無効化するとこの資格情報では接続できなくなります。
+          新しい管理者アカウントに接続情報を切り替えて再実行するか、
+          allow_disable_connection_account: True を指定して実行してください
+          （その場合は本 Playbook の最終タスクで無効化されます）。
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - user_plan_map[item.name].is_connection_account
+        - user_plan_map[item.name].need_disable
+        - not (allow_disable_connection_account | default(false) | bool)
