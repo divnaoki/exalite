@@ -1,0 +1,281 @@
+---
+# =====================================================================
+# 05_ネットワーク接続 : ServerLAN 以外の追加アダプターへ共通設定 + 個別リネーム
+#
+#   対象      : ServerLAN を除く全アダプター（実行時に動的取得, ifIndex順）
+#   リネーム  : 先頭から SVLAN1, SVLAN2, SVLAN3 ...
+#   共通設定  : DNS自動取得 / WINS未設定 / IPv6無効 ほか（下記 vars）
+#
+#   構成ルール:
+#     PHASE 1  変更前の設定情報を取得
+#     PHASE 2  現在値と異なる場合のみ変更（冪等）
+#     PHASE 3  変更後の設定情報を再取得して確認
+# =====================================================================
+- name: "05_ネットワーク接続 (SVLAN 追加アダプター設定)"
+  hosts: windows
+  gather_facts: false
+
+  vars:
+    exclude_adapter: "ServerLAN"     # 除外する管理NIC
+    svlan_prefix: "SVLAN"            # リネーム後の接頭辞（SVLAN1, SVLAN2, ...）
+
+    # --- 共通設定値 ---
+    common_dns_auto_obtain: true     # DNSは自動取得(DHCP)
+    common_dns_register: true        # この接続のアドレスをDNSに登録
+    common_metric_auto: true         # インターフェイスメトリック自動
+    common_netbios: 0                # NetBIOS: 0=既定値
+    common_lmhosts_enabled: false    # LMHOSTS参照 無効
+    # WINSサーバーは「設定しない」ため専用タスクは設けない
+
+    # --- コンポーネント（バインディング）---
+    comp_multiplexor: false          # ms_implat（NICチーミング時のみ有効化可能。スタンドアロンNICでは無効が既定）
+    comp_lldp: true                  # ms_lldp
+    comp_ipv6: false                 # ms_tcpip6（閉域網のため無効）
+    comp_lltd_responder: true        # ms_rspndr
+    comp_lltd_mapper: true           # ms_lltdio
+
+  tasks:
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得（ServerLAN 以外）
+    # =================================================================
+    - name: "[BEFORE] 対象アダプター(ServerLAN以外)の現在設定を取得"
+      ansible.windows.win_powershell:
+        parameters:
+          Exclude: "{{ exclude_adapter }}"
+        script: |
+          param($Exclude)
+          $targets = Get-NetAdapter | Where-Object { $_.Name -ne $Exclude } | Sort-Object ifIndex
+          $list = @()
+          foreach ($a in $targets) {
+            $alias = $a.Name; $idx = $a.ifIndex
+            $o = [ordered]@{
+              AdapterName=$alias; IfIndex=$idx
+              AutomaticMetric=$null; RegisterThisConnectionsAddress=$null
+              DnsServers=@(); TcpipNetbiosOptions=$null; LmHostsEnabled=$null
+              Binding_ms_implat=$null; Binding_ms_lldp=$null; Binding_ms_tcpip6=$null
+              Binding_ms_rspndr=$null; Binding_ms_lltdio=$null
+            }
+            $ipif = Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue
+            if ($ipif) { $o.AutomaticMetric = ($ipif.AutomaticMetric -eq 'Enabled') }
+            $dc = Get-DnsClient -InterfaceIndex $idx -ErrorAction SilentlyContinue
+            if ($dc) { $o.RegisterThisConnectionsAddress = [bool]$dc.RegisterThisConnectionsAddress }
+            $dns = Get-DnsClientServerAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue
+            if ($dns) { $o.DnsServers = @($dns.ServerAddresses) }
+            foreach ($c in 'ms_implat','ms_lldp','ms_tcpip6','ms_rspndr','ms_lltdio') {
+              $b = Get-NetAdapterBinding -Name $alias -ComponentID $c -ErrorAction SilentlyContinue
+              if ($b) { $o."Binding_$c" = [bool]$b.Enabled }
+            }
+            $cfg = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$idx" -ErrorAction SilentlyContinue
+            if ($cfg) {
+              $o.TcpipNetbiosOptions = $cfg.TcpipNetbiosOptions
+              $o.LmHostsEnabled      = [bool]$cfg.WINSEnableLMHostsLookup
+            }
+            $list += [PSCustomObject]$o
+          }
+          $Ansible.Changed = $false
+          ,$list
+      register: nic_before
+
+    - name: "[BEFORE] 対象アダプターと現在設定を表示"
+      ansible.builtin.debug:
+        var: nic_before.output
+
+    - name: "対象アダプター一覧を変数に格納"
+      ansible.builtin.set_fact:
+        targets: "{{ nic_before.output[0] }}"
+
+    # =================================================================
+    # PHASE 2: 変更（現在値と異なる場合のみ実行）
+    # =================================================================
+
+    # --- アダプター名を個別に SVLAN{n} へ変更 ---
+    - name: "アダプター名を SVLAN{n} へ変更"
+      ansible.windows.win_shell: |
+        Rename-NetAdapter -Name "{{ item.AdapterName }}" -NewName "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ item.AdapterName }} -> {{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: item.AdapterName != (svlan_prefix ~ ansible_loop.index)
+      changed_when: true
+
+    # --- DNSサーバー: 自動取得(DHCP)（win_dns_client は冪等）---
+    - name: "DNSサーバーを自動取得に設定"
+      ansible.windows.win_dns_client:
+        adapter_names: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+        dns_servers: "{{ [] if common_dns_auto_obtain else [] }}"
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+
+    # --- この接続のアドレスをDNSに登録 ---
+    - name: "この接続のアドレスをDNSに登録 を設定"
+      ansible.windows.win_shell: |
+        Set-DnsClient -InterfaceAlias "{{ svlan_prefix }}{{ ansible_loop.index }}" -RegisterThisConnectionsAddress ${{ 'true' if common_dns_register else 'false' }}
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: item.RegisterThisConnectionsAddress != common_dns_register
+      changed_when: true
+
+    # --- インターフェイスメトリック 自動/手動 ---
+    - name: "インターフェイスメトリック 自動/手動 を設定"
+      ansible.windows.win_shell: |
+        Set-NetIPInterface -InterfaceAlias "{{ svlan_prefix }}{{ ansible_loop.index }}" -AutomaticMetric {{ 'Enabled' if common_metric_auto else 'Disabled' }}
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: item.AutomaticMetric != common_metric_auto
+      changed_when: true
+
+    # --- LMHOSTS 参照（マシン全体のグローバル設定: NetBT\Parameters\EnableLMHOSTS）---
+    - name: "LMHOSTS の参照有効/無効 を設定（グローバル）"
+      ansible.windows.win_powershell:
+        parameters:
+          Enable: "{{ common_lmhosts_enabled }}"
+        script: |
+          param([bool]$Enable)
+          $path = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters'
+          $desired = if ($Enable) { 1 } else { 0 }
+          $cur = (Get-ItemProperty -Path $path -Name EnableLMHOSTS -ErrorAction SilentlyContinue).EnableLMHOSTS
+          if ($cur -ne $desired) {
+            Set-ItemProperty -Path $path -Name EnableLMHOSTS -Value $desired -Type DWord
+            $Ansible.Changed = $true
+          } else {
+            $Ansible.Changed = $false
+          }
+
+    # --- NetBIOS over TCP/IP ---
+    - name: "NetBIOS over TCP/IP 設定"
+      ansible.windows.win_shell: |
+        $idx = (Get-NetAdapter -Name "{{ svlan_prefix }}{{ ansible_loop.index }}").ifIndex
+        $cfg = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$idx"
+        Invoke-CimMethod -InputObject $cfg -MethodName SetTcpipNetbios `
+          -Arguments @{TcpipNetbiosOptions={{ common_netbios }}}
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: (item.TcpipNetbiosOptions | int) != (common_netbios | int)
+      changed_when: true
+
+    # --- コンポーネント: Multiplexor Protocol (ms_implat) ---
+    - name: "コンポーネント Multiplexor Protocol (ms_implat) を設定"
+      ansible.windows.win_shell: |
+        {{ 'Enable' if comp_multiplexor else 'Disable' }}-NetAdapterBinding -Name "{{ svlan_prefix }}{{ ansible_loop.index }}" -ComponentID ms_implat
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: item.Binding_ms_implat != comp_multiplexor
+      changed_when: true
+
+    # --- コンポーネント: LLDP Protocol Driver (ms_lldp) ---
+    - name: "コンポーネント LLDP Protocol Driver (ms_lldp) を設定"
+      ansible.windows.win_shell: |
+        {{ 'Enable' if comp_lldp else 'Disable' }}-NetAdapterBinding -Name "{{ svlan_prefix }}{{ ansible_loop.index }}" -ComponentID ms_lldp
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: item.Binding_ms_lldp != comp_lldp
+      changed_when: true
+
+    # --- コンポーネント: TCP/IPv6 (ms_tcpip6) ---
+    - name: "コンポーネント TCP/IPv6 (ms_tcpip6) を設定"
+      ansible.windows.win_shell: |
+        {{ 'Enable' if comp_ipv6 else 'Disable' }}-NetAdapterBinding -Name "{{ svlan_prefix }}{{ ansible_loop.index }}" -ComponentID ms_tcpip6
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: item.Binding_ms_tcpip6 != comp_ipv6
+      changed_when: true
+
+    # --- コンポーネント: LLTD Responder (ms_rspndr) ---
+    - name: "コンポーネント LLTD Responder (ms_rspndr) を設定"
+      ansible.windows.win_shell: |
+        {{ 'Enable' if comp_lltd_responder else 'Disable' }}-NetAdapterBinding -Name "{{ svlan_prefix }}{{ ansible_loop.index }}" -ComponentID ms_rspndr
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: item.Binding_ms_rspndr != comp_lltd_responder
+      changed_when: true
+
+    # --- コンポーネント: LLTD Mapper I/O Driver (ms_lltdio) ---
+    - name: "コンポーネント LLTD Mapper I/O Driver (ms_lltdio) を設定"
+      ansible.windows.win_shell: |
+        {{ 'Enable' if comp_lltd_mapper else 'Disable' }}-NetAdapterBinding -Name "{{ svlan_prefix }}{{ ansible_loop.index }}" -ComponentID ms_lltdio
+      args:
+        executable: powershell
+      loop: "{{ targets }}"
+      loop_control:
+        extended: true
+        label: "{{ svlan_prefix }}{{ ansible_loop.index }}"
+      when: item.Binding_ms_lltdio != comp_lltd_mapper
+      changed_when: true
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を再取得（確認）
+    # =================================================================
+    - name: "[AFTER] 対象アダプター(ServerLAN以外)の設定を再取得"
+      ansible.windows.win_powershell:
+        parameters:
+          Exclude: "{{ exclude_adapter }}"
+        script: |
+          param($Exclude)
+          $targets = Get-NetAdapter | Where-Object { $_.Name -ne $Exclude } | Sort-Object ifIndex
+          $list = @()
+          foreach ($a in $targets) {
+            $alias = $a.Name; $idx = $a.ifIndex
+            $o = [ordered]@{
+              AdapterName=$alias; IfIndex=$idx
+              AutomaticMetric=$null; RegisterThisConnectionsAddress=$null
+              DnsServers=@(); TcpipNetbiosOptions=$null; LmHostsEnabled=$null
+              Binding_ms_implat=$null; Binding_ms_lldp=$null; Binding_ms_tcpip6=$null
+              Binding_ms_rspndr=$null; Binding_ms_lltdio=$null
+            }
+            $ipif = Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue
+            if ($ipif) { $o.AutomaticMetric = ($ipif.AutomaticMetric -eq 'Enabled') }
+            $dc = Get-DnsClient -InterfaceIndex $idx -ErrorAction SilentlyContinue
+            if ($dc) { $o.RegisterThisConnectionsAddress = [bool]$dc.RegisterThisConnectionsAddress }
+            $dns = Get-DnsClientServerAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue
+            if ($dns) { $o.DnsServers = @($dns.ServerAddresses) }
+            foreach ($c in 'ms_implat','ms_lldp','ms_tcpip6','ms_rspndr','ms_lltdio') {
+              $b = Get-NetAdapterBinding -Name $alias -ComponentID $c -ErrorAction SilentlyContinue
+              if ($b) { $o."Binding_$c" = [bool]$b.Enabled }
+            }
+            $cfg = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$idx" -ErrorAction SilentlyContinue
+            if ($cfg) {
+              $o.TcpipNetbiosOptions = $cfg.TcpipNetbiosOptions
+              $o.LmHostsEnabled      = [bool]$cfg.WINSEnableLMHostsLookup
+            }
+            $list += [PSCustomObject]$o
+          }
+          $Ansible.Changed = $false
+          ,$list
+      register: nic_after
+
+    - name: "[AFTER] 変更後の設定を表示"
+      ansible.builtin.debug:
+        var: nic_after.output
