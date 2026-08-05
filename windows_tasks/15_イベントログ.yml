@@ -1,82 +1,311 @@
 ---
-# 15_イベントログ : Ansibleタスク
-# 自動生成: グループ内で内容が完全一致するタスクは重複排除済み
+# =====================================================================
+# (WIN・構築) 稼働性能管理及びサーバ管理サービス_システム設定
+#   (15) イベントログ
 #
-# ── 使用変数一覧 ─────────────────────────────
+#   設定値は Exastro IT Automation のパラメータシートから
+#   「代入値自動登録設定」経由で VAR_* 変数として渡される。
 #
-#   eventlog_application_path (文字列): 文字列・環境依存値(例: 要確定)
-#   eventlog_application_max_size_kb (数値): 数値(例: 要確定)
-#   eventlog_application_retention_policy (選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
-#   eventlog_security_path (文字列): 文字列・環境依存値(例: 要確定)
-#   eventlog_security_max_size_kb (数値): 数値(例: 要確定)
-#   eventlog_security_retention_policy (選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
-#   eventlog_system_path (文字列): 文字列・環境依存値(例: 要確定)
-#   eventlog_system_max_size_kb (数値): 数値(例: 要確定)
-#   eventlog_system_retention_policy (選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
-#──────────────────────────────────────────────
+#   ・ログのパスは .evtx ファイル名まで含むフルパスで登録される
+#       例) %SystemRoot%\System32\Winevt\Logs\Security.evtx
+#   ・最大ログサイズは KB 単位で登録される（例: 20480）
+#   ・上書きポリシーは 3 項目中 1 項目が TRUE、残り 2 項目が FALSE
+#
+#   処理方式
+#   ・設定前に現行値を一括取得し、差分がある項目のみ設定を実行する
+#   ・設定項目（ログのパス／最大ログサイズ／上書きポリシー）ごとに
+#     タスクを分割し、実行ログ上で適用対象を判別しやすくする
+# =====================================================================
+- name: Windows イベントログ設定
+  hosts: all
+  gather_facts: false
 
-- name: Applicationログの保存パスを変更
-  ansible.windows.win_shell: |
-    # 設定可能な値 → eventlog_application_path(文字列): 文字列・環境依存値(例: 要確定)
-    wevtutil sl Application /lfn:"{{ eventlog_application_path }}"
-  args:
-    executable: powershell
-  changed_when: true
+  vars:
+    # -----------------------------------------------------------------
+    # 設定対象イベントログ定義
+    # -----------------------------------------------------------------
+    eventlog_settings:
+      # --- No.1〜5 : Application ---
+      - display_name: "Application"
+        log_name: "Application"
+        log_path: "{{ VAR_EvtApp_LogPath | default('') }}"
+        max_size_kb: "{{ VAR_EvtApp_MaxSizeKB | default('') }}"
+        overwrite_as_needed: "{{ VAR_EvtApp_OverwriteAsNeeded | default('FALSE') }}"
+        archive_when_full: "{{ VAR_EvtApp_ArchiveWhenFull | default('FALSE') }}"
+        do_not_overwrite: "{{ VAR_EvtApp_DoNotOverwrite | default('FALSE') }}"
 
-- name: Applicationログの最大サイズを設定
-  ansible.windows.win_eventlog:
-    name: Application
-    # 設定可能な値 → eventlog_application_max_size_kb(数値): 数値(例: 要確定)
-    maximum_size: "{{ (eventlog_application_max_size_kb | int) * 1024 }}"
-    state: present
+      # --- No.6〜10 : セキュリティ ---
+      - display_name: "セキュリティ"
+        log_name: "Security"
+        log_path: "{{ VAR_EvtSec_LogPath | default('') }}"
+        max_size_kb: "{{ VAR_EvtSec_MaxSizeKB | default('') }}"
+        overwrite_as_needed: "{{ VAR_EvtSec_OverwriteAsNeeded | default('FALSE') }}"
+        archive_when_full: "{{ VAR_EvtSec_ArchiveWhenFull | default('FALSE') }}"
+        do_not_overwrite: "{{ VAR_EvtSec_DoNotOverwrite | default('FALSE') }}"
 
-- name: Applicationログの保持ポリシー(上書き/アーカイブ)を設定
-  ansible.windows.win_eventlog:
-    name: Application
-    # 設定可能な値 → eventlog_application_retention_policy(選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
-    overflow_action: "{{ eventlog_application_retention_policy }}"
-    state: present
+      # --- No.11〜15 : システム ---
+      - display_name: "システム"
+        log_name: "System"
+        log_path: "{{ VAR_EvtSys_LogPath | default('') }}"
+        max_size_kb: "{{ VAR_EvtSys_MaxSizeKB | default('') }}"
+        overwrite_as_needed: "{{ VAR_EvtSys_OverwriteAsNeeded | default('FALSE') }}"
+        archive_when_full: "{{ VAR_EvtSys_ArchiveWhenFull | default('FALSE') }}"
+        do_not_overwrite: "{{ VAR_EvtSys_DoNotOverwrite | default('FALSE') }}"
 
-- name: Securityログの保存パスを変更
-  ansible.windows.win_shell: |
-    # 設定可能な値 → eventlog_security_path(文字列): 文字列・環境依存値(例: 要確定)
-    wevtutil sl Security /lfn:"{{ eventlog_security_path }}"
-  args:
-    executable: powershell
-  changed_when: true
+  tasks:
+    # =================================================================
+    # 1. パラメータシート取得値の確認
+    # =================================================================
+    - name: パラメータシート取得値の確認
+      ansible.builtin.debug:
+        msg:
+          - "ログ種別        : {{ item.display_name }} ({{ item.log_name }})"
+          - "ログのパス      : {{ item.log_path | default('(未設定)', true) }}"
+          - "最大ログサイズ  : {{ item.max_size_kb | default('(未設定)', true) }} KB"
+          - "上書きする      : {{ item.overwrite_as_needed }}"
+          - "アーカイブする  : {{ item.archive_when_full }}"
+          - "上書きしない    : {{ item.do_not_overwrite }}"
+      loop: "{{ eventlog_settings }}"
+      loop_control:
+        label: "{{ item.display_name }}"
 
-- name: Securityログの最大サイズを設定
-  ansible.windows.win_eventlog:
-    name: Security
-    # 設定可能な値 → eventlog_security_max_size_kb(数値): 数値(例: 要確定)
-    maximum_size: "{{ (eventlog_security_max_size_kb | int) * 1024 }}"
-    state: present
+    # =================================================================
+    # 2. パラメータの妥当性チェック
+    # =================================================================
+    - name: 上書きポリシー選択値の妥当性チェック
+      ansible.builtin.assert:
+        that:
+          - >-
+            [ item.overwrite_as_needed, item.archive_when_full, item.do_not_overwrite ]
+            | map('string') | map('trim') | map('upper')
+            | select('equalto', 'TRUE') | list | length == 1
+        fail_msg: >-
+          [{{ item.display_name }}] 上書きポリシーの選択値が不正です。
+          3項目のうち TRUE はちょうど 1 つである必要があります。
+          (上書きする={{ item.overwrite_as_needed }} /
+           アーカイブする={{ item.archive_when_full }} /
+           上書きしない={{ item.do_not_overwrite }})
+        success_msg: "[{{ item.display_name }}] 上書きポリシーの選択値は正常です。"
+        quiet: true
+      loop: "{{ eventlog_settings }}"
+      loop_control:
+        label: "{{ item.display_name }}"
 
-- name: Securityログの保持ポリシー(上書き/アーカイブ)を設定
-  ansible.windows.win_eventlog:
-    name: Security
-    # 設定可能な値 → eventlog_security_retention_policy(選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
-    overflow_action: "{{ eventlog_security_retention_policy }}"
-    state: present
+    # 最大ログサイズは KB 単位の正の整数であること
+    # （カンマ区切りや単位付きの文字列が渡された場合はここで検出する）
+    - name: 最大ログサイズの妥当性チェック
+      ansible.builtin.assert:
+        that:
+          - item.max_size_kb | string | trim is match('^[0-9]+$')
+          - item.max_size_kb | string | trim | int > 0
+        fail_msg: >-
+          [{{ item.display_name }}] 最大ログサイズ(KB) は数値のみで指定してください。
+          (取得値={{ item.max_size_kb }})
+        success_msg: "[{{ item.display_name }}] 最大ログサイズは正常です。"
+        quiet: true
+      loop: "{{ eventlog_settings }}"
+      loop_control:
+        label: "{{ item.display_name }}"
+      when: item.max_size_kb | string | trim | length > 0
 
-- name: Systemログの保存パスを変更
-  ansible.windows.win_shell: |
-    # 設定可能な値 → eventlog_system_path(文字列): 文字列・環境依存値(例: 要確定)
-    wevtutil sl System /lfn:"{{ eventlog_system_path }}"
-  args:
-    executable: powershell
-  changed_when: true
+    - name: ログのパスの形式チェック
+      ansible.builtin.assert:
+        that:
+          - item.log_path | string | trim | lower is search('\.evtx$')
+          - "\"'\" not in (item.log_path | string)"
+        fail_msg: >-
+          [{{ item.display_name }}] ログのパスは .evtx ファイル名まで含むフルパスで
+          指定してください（単一引用符は使用不可）。
+          (取得値={{ item.log_path }})
+        success_msg: "[{{ item.display_name }}] ログのパスの形式は正常です。"
+        quiet: true
+      loop: "{{ eventlog_settings }}"
+      loop_control:
+        label: "{{ item.display_name }}"
+      when: item.log_path | string | trim | length > 0
 
-- name: Systemログの最大サイズを設定
-  ansible.windows.win_eventlog:
-    name: System
-    # 設定可能な値 → eventlog_system_max_size_kb(数値): 数値(例: 要確定)
-    maximum_size: "{{ (eventlog_system_max_size_kb | int) * 1024 }}"
-    state: present
+    # =================================================================
+    # 3. 上書きポリシーの変換
+    #    ラジオボタン 3 項目 → Windows の LogMode に変換する
+    #      Circular   : 必要に応じてイベントを上書きする（最も古いイベントから）
+    #      AutoBackup : イベントを上書きしないでログをアーカイブする
+    #      Retain     : イベントを上書きしない
+    #
+    #    ※ ログのパス／最大ログサイズはパラメータシートの値をそのまま使用する
+    # =================================================================
+    - name: 上書きポリシーの変換
+      ansible.builtin.set_fact:
+        eventlog_targets: >-
+          {{ eventlog_targets | default([]) + [ item | combine({
+               'log_path_val': (item.log_path | string | trim),
+               'max_size_kb_val': (item.max_size_kb | string | trim),
+               'log_mode': (
+                 'Circular'   if item.overwrite_as_needed | string | trim | upper == 'TRUE' else
+                 'AutoBackup' if item.archive_when_full   | string | trim | upper == 'TRUE' else
+                 'Retain'
+               )
+             }) ] }}
+      loop: "{{ eventlog_settings }}"
+      loop_control:
+        label: "{{ item.display_name }}"
 
-- name: Systemログの保持ポリシー(上書き/アーカイブ)を設定
-  ansible.windows.win_eventlog:
-    name: System
-    # 設定可能な値 → eventlog_system_retention_policy(選択): 必要に応じてイベントを上書きする(OverwriteAsNeeded) / 指定日数以前を上書き(OverwriteOlder) / 上書きしない・手動クリア(DoNotOverwrite)
-    overflow_action: "{{ eventlog_system_retention_policy }}"
-    state: present
+    - name: 設定予定値の確認
+      ansible.builtin.debug:
+        msg:
+          - "{{ item.display_name }} ({{ item.log_name }})"
+          - "  ログのパス      : {{ item.log_path_val | default('(未設定)', true) }}"
+          - "  最大ログサイズ  : {{ item.max_size_kb_val | default('(未設定)', true) }} KB"
+          - "  上書きポリシー  : {{ item.log_mode }}"
+      loop: "{{ eventlog_targets }}"
+      loop_control:
+        label: "{{ item.display_name }}"
+
+    # =================================================================
+    # 4. 現行設定の取得
+    #    設定前に一括取得し、以降の各設定タスクの実行要否判定に使用する
+    # =================================================================
+    - name: 現行のイベントログ設定を取得
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'Stop'
+        $result = @{}
+        foreach ($name in @('Application', 'Security', 'System')) {
+            $log = Get-WinEvent -ListLog $name
+            $result[$name] = @{
+                LogFilePath         = $log.LogFilePath
+                LogFilePathExpanded = [Environment]::ExpandEnvironmentVariables($log.LogFilePath)
+                MaximumSizeKB       = $log.MaximumSizeInBytes / 1024
+                LogMode             = $log.LogMode.ToString()
+            }
+        }
+        $result | ConvertTo-Json -Depth 3
+      register: eventlog_before_raw
+      changed_when: false
+
+    - name: 現行設定の展開
+      ansible.builtin.set_fact:
+        eventlog_before: "{{ eventlog_before_raw.stdout | from_json }}"
+
+    - name: 現行設定の出力
+      ansible.builtin.debug:
+        msg:
+          - "{{ item.display_name }} ({{ item.log_name }})"
+          - "  ログのパス      : {{ eventlog_before[item.log_name].LogFilePath }}"
+          - "  最大ログサイズ  : {{ eventlog_before[item.log_name].MaximumSizeKB }} KB"
+          - "  上書きポリシー  : {{ eventlog_before[item.log_name].LogMode }}"
+      loop: "{{ eventlog_targets }}"
+      loop_control:
+        label: "{{ item.display_name }}"
+
+    # =================================================================
+    # 5-1. ログのパス設定
+    #      現行値と一致する場合はスキップする
+    #      比較は環境変数展開前後の両方で行い、%SystemRoot% 表記と
+    #      C:\Windows 表記の差異による誤検知を防ぐ
+    # =================================================================
+    - name: ログのパス設定
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'Stop'
+
+        $LogPath = '{{ item.log_path_val }}'
+
+        # 格納先ディレクトリが存在しない場合は作成する
+        $logDir = Split-Path -Path ([Environment]::ExpandEnvironmentVariables($LogPath)) -Parent
+        if (-not (Test-Path -LiteralPath $logDir)) {
+            New-Item -Path $logDir -ItemType Directory -Force | Out-Null
+            Write-Output "INFO  Directory created: $logDir"
+        }
+
+        $log = Get-WinEvent -ListLog '{{ item.log_name }}'
+        $log.LogFilePath = $LogPath
+        $log.SaveChanges()
+        Write-Output "RESULT=OK  LogFilePath -> $LogPath"
+      loop: "{{ eventlog_targets }}"
+      loop_control:
+        label: "{{ item.display_name }}"
+      when:
+        - item.log_path_val | length > 0
+        - (item.log_path_val | lower) != (eventlog_before[item.log_name].LogFilePath | lower)
+        - (item.log_path_val | lower) != (eventlog_before[item.log_name].LogFilePathExpanded | lower)
+      register: eventlog_path_result
+      failed_when: rc != 0 or 'RESULT=OK' not in stdout
+
+    # =================================================================
+    # 5-2. 最大ログサイズ設定
+    #      現行値と一致する場合はスキップする
+    #      比較・設定値ともパラメータシートの KB 値をそのまま使用する
+    #      （MaximumSizeInBytes プロパティがバイト単位のため書き込み時のみ
+    #        1024 倍して受け渡す）
+    # =================================================================
+    - name: 最大ログサイズ設定
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'Stop'
+
+        $MaxSizeKB = [Int64]{{ item.max_size_kb_val }}
+
+        $log = Get-WinEvent -ListLog '{{ item.log_name }}'
+        $log.MaximumSizeInBytes = $MaxSizeKB * 1024
+        $log.SaveChanges()
+        Write-Output "RESULT=OK  MaximumSizeKB -> $MaxSizeKB"
+      loop: "{{ eventlog_targets }}"
+      loop_control:
+        label: "{{ item.display_name }}"
+      when:
+        - item.max_size_kb_val | length > 0
+        - (item.max_size_kb_val | int) != (eventlog_before[item.log_name].MaximumSizeKB | int)
+      register: eventlog_size_result
+      failed_when: rc != 0 or 'RESULT=OK' not in stdout
+
+    # =================================================================
+    # 5-3. 上書きポリシー設定
+    #      現行値と一致する場合はスキップする
+    # =================================================================
+    - name: 上書きポリシー設定
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'Stop'
+
+        $log = Get-WinEvent -ListLog '{{ item.log_name }}'
+        $log.LogMode = '{{ item.log_mode }}'
+        $log.SaveChanges()
+        Write-Output "RESULT=OK  LogMode -> {{ item.log_mode }}"
+      loop: "{{ eventlog_targets }}"
+      loop_control:
+        label: "{{ item.display_name }}"
+      when:
+        - item.log_mode != eventlog_before[item.log_name].LogMode
+      register: eventlog_mode_result
+      failed_when: rc != 0 or 'RESULT=OK' not in stdout
+
+    # =================================================================
+    # 6. 設定結果の確認（エビデンス取得）
+    # =================================================================
+    - name: 設定後のイベントログ設定を取得
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'Stop'
+        Get-WinEvent -ListLog Application, Security, System |
+          Select-Object LogName,
+                        LogFilePath,
+                        @{ N = 'MaximumSizeKB'; E = { $_.MaximumSizeInBytes / 1024 } },
+                        LogMode,
+                        IsEnabled |
+          ConvertTo-Json -Depth 3
+      register: eventlog_after_raw
+      changed_when: false
+
+    - name: 設定結果の出力
+      ansible.builtin.debug:
+        var: eventlog_after_raw.stdout | from_json
+
+    # =================================================================
+    # 7. ログのパスを変更した場合の注意喚起
+    # =================================================================
+    - name: ログファイル移行に関する注意喚起
+      ansible.builtin.debug:
+        msg: >-
+          ログのパスを変更しました。新しいパスへのログファイル生成は
+          Windows Event Log サービスの再起動（または OS 再起動）後に反映されます。
+          変更前のログファイルは自動移行されないため、必要に応じて別途退避してください。
+      when: >-
+        eventlog_path_result.results
+        | default([])
+        | rejectattr('skipped', 'defined')
+        | list | length > 0
