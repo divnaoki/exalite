@@ -1,0 +1,289 @@
+---
+# =====================================================================
+# 12_ソフトウェア制御（UAC設定）
+#
+# 対象:
+#   ユーザーアカウントの設定 >
+#   コンピューターに対する変更の通知を受け取るタイミングの選択
+#
+# 構成ルール:
+#   PHASE 0  パラメータシート値の正規化とレベルの解決
+#   PHASE 1  変更前の設定情報を取得（必ず取得）
+#   PHASE 2  現在値と異なる場合のみ変更を実行（冪等）
+#   PHASE 3  変更後の設定情報を再取得して確認
+#
+# 前提:
+#   - Exastro のパラメータシートからは画面表示の日本語ラベルが渡る想定。
+#     例) "アプリがコンピューターに変更を加えようとする場合のみ通知する（既定）"
+#   - 表記ゆれ（全角/半角カッコ・空白・コンピュータ/コンピューター・「（既定）」の
+#     有無）は正規化して判定する。スライダー段階（1〜4）の数値でも指定できる。
+#   - 解決できない値が渡された場合は、1件も変更しないうちに中止する。
+#
+# 【実装方式について】
+# UAC のスライダーを直接扱うモジュールは ansible.windows / community.windows の
+# いずれにも存在しないため、実体であるレジストリ値を win_regedit で設定する。
+# スライダーの位置は ConsentPromptBehaviorAdmin と PromptOnSecureDesktop の
+# 組み合わせで決まるため、必ずセットで扱う。
+#
+# 設定値は vars/12_uac.yml で定義。
+# シェル実行は win_powershell ではなく win_shell を使用（本業環境に合わせる）。
+# =====================================================================
+- name: "12_ソフトウェア制御（UAC設定）"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/12_uac.yml
+
+  vars:
+    uac_reg_path: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+
+  tasks:
+    # =================================================================
+    # PHASE 0: パラメータシート値の正規化とレベルの解決
+    # =================================================================
+    # 表記ゆれを吸収するため、比較する文字列は両側とも同じ規則で正規化する。
+    #   ・前後と途中の空白（半角/全角）を除去
+    #   ・全角カッコ（）を半角 () に統一
+    #   ・「コンピューター」を「コンピュータ」に統一
+    #   ・「(既定)」の有無を無視
+    - name: "[PREP] 判定用にラベルを正規化"
+      ansible.builtin.set_fact:
+        uac_levels_norm: >-
+          {{ uac_levels_norm | default([]) + [ item | combine({
+               'label_norm': (item.label | string
+                              | replace(' ', '') | replace('　', '')
+                              | replace('（', '(') | replace('）', ')')
+                              | replace('コンピューター', 'コンピュータ')
+                              | replace('(既定)', ''))
+             }) ] }}
+      loop: "{{ uac_levels }}"
+      loop_control:
+        label: "レベル{{ item.level }} : {{ item.label }}"
+
+    - name: "[PREP] パラメータシートの指定値を正規化"
+      ansible.builtin.set_fact:
+        uac_input_norm: >-
+          {{ uac_notification_setting | string | trim
+             | replace(' ', '') | replace('　', '')
+             | replace('（', '(') | replace('）', ')')
+             | replace('コンピューター', 'コンピュータ')
+             | replace('(既定)', '') }}
+
+    # ラベル一致を優先し、見つからなければスライダー段階（1〜4）の数値として解決する。
+    - name: "[PREP] 指定値に一致するレベルを検索"
+      ansible.builtin.set_fact:
+        uac_matches: >-
+          {{ (uac_levels_norm | selectattr('label_norm', 'eq', uac_input_norm) | list)
+             + (uac_levels_norm | selectattr('level', 'eq', uac_input_norm | int) | list) }}
+
+    - name: "[GUARD] 指定値を UAC レベルに解決できるか検証"
+      ansible.builtin.assert:
+        that:
+          - (uac_matches | length) > 0
+        success_msg: >-
+          指定値を解決しました:
+          レベル{{ (uac_matches | first).level }} / {{ (uac_matches | first).label }}
+        fail_msg: >-
+          指定値「{{ uac_notification_setting }}」を UAC のレベルに解決できません。
+          指定できる値: {{ uac_levels | map(attribute='label') | list }}
+          （またはスライダー段階の数値 {{ uac_levels | map(attribute='level') | list }}）
+
+    - name: "[PREP] 設定するレベルを確定"
+      ansible.builtin.set_fact:
+        uac_target: "{{ uac_matches | first }}"
+
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得
+    # =================================================================
+    # 値が存在しない場合は $null を返す（未設定として扱い、PHASE 2 で作成する）。
+    - name: "[BEFORE] UAC の現在設定を取得"
+      ansible.windows.win_shell: |
+        $path = '{{ uac_reg_path }}'
+
+        function Get-UacValue($name) {
+          $p = Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue
+          if ($null -eq $p) { return $null }
+          return [int]$p.$name
+        }
+
+        $r = [ordered]@{
+          KeyExists                  = [bool](Test-Path $path)
+          # UAC 自体の有効/無効。0 の場合スライダーは最下段扱いになる
+          EnableLUA                  = Get-UacValue 'EnableLUA'
+          # スライダー位置を決める2値
+          ConsentPromptBehaviorAdmin = Get-UacValue 'ConsentPromptBehaviorAdmin'
+          PromptOnSecureDesktop      = Get-UacValue 'PromptOnSecureDesktop'
+          # 参考情報（標準ユーザー側の動作。本 Playbook では変更しない）
+          ConsentPromptBehaviorUser  = Get-UacValue 'ConsentPromptBehaviorUser'
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: uac_before_raw
+
+    - name: "[BEFORE] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        uac_before: "{{ uac_before_raw.stdout | from_json }}"
+
+    # 現在のレジストリ値の組み合わせがどのレベルに相当するかを求める。
+    # 対応表にない組み合わせ（手動で片方だけ変更された等）の場合は空になる。
+    - name: "[BEFORE] 現在のレベルを判定"
+      ansible.builtin.set_fact:
+        uac_before_levels: >-
+          {{ uac_levels_norm
+             | selectattr('consent_prompt_behavior_admin', 'eq',
+                          uac_before.ConsentPromptBehaviorAdmin)
+             | selectattr('prompt_on_secure_desktop', 'eq',
+                          uac_before.PromptOnSecureDesktop)
+             | list }}
+
+    - name: "[BEFORE] 現在設定を表示"
+      ansible.builtin.debug:
+        var: uac_before
+
+    - name: "[BEFORE] 設定内容を表示"
+      ansible.builtin.debug:
+        msg:
+          - "現在のレベル : {{ (uac_before_levels | first).label | default('対応表にない組み合わせ（個別に設定されています）', true) }}"
+          - "指定のレベル : レベル{{ uac_target.level }} / {{ uac_target.label }}"
+          - "ConsentPromptBehaviorAdmin : {{ uac_before.ConsentPromptBehaviorAdmin | default('未設定', true) }} -> {{ uac_target.consent_prompt_behavior_admin }}"
+          - "PromptOnSecureDesktop      : {{ uac_before.PromptOnSecureDesktop | default('未設定', true) }} -> {{ uac_target.prompt_on_secure_desktop }}"
+          - "EnableLUA                  : {{ uac_before.EnableLUA | default('未設定', true) }} -> {{ 1 if (uac_enforce_enable_lua | bool) else '変更しない' }}"
+
+    # =================================================================
+    # PHASE 2: 変更（現在値と異なる場合のみ実行）
+    # =================================================================
+    # スライダーの位置は2値の組み合わせで決まるため、両方を対象にする。
+    # ただし実際に書き込むのは現在値と異なるものだけ。
+    - name: "UAC 昇格プロンプトの動作を設定 (ConsentPromptBehaviorAdmin)"
+      ansible.windows.win_regedit:
+        path: "{{ uac_reg_path }}"
+        name: ConsentPromptBehaviorAdmin
+        data: "{{ uac_target.consent_prompt_behavior_admin }}"
+        type: dword
+      when: uac_before.ConsentPromptBehaviorAdmin != uac_target.consent_prompt_behavior_admin
+
+    - name: "UAC セキュアデスクトップ（画面の暗転）を設定 (PromptOnSecureDesktop)"
+      ansible.windows.win_regedit:
+        path: "{{ uac_reg_path }}"
+        name: PromptOnSecureDesktop
+        data: "{{ uac_target.prompt_on_secure_desktop }}"
+        type: dword
+      when: uac_before.PromptOnSecureDesktop != uac_target.prompt_on_secure_desktop
+
+    # EnableLUA=0 では、スライダーの段階に関わらず UAC が機能しない。
+    # 通常は既に 1 のため、このタスクは実行されない。
+    - name: "UAC を有効化 (EnableLUA)"
+      ansible.windows.win_regedit:
+        path: "{{ uac_reg_path }}"
+        name: EnableLUA
+        data: 1
+        type: dword
+      when:
+        - uac_enforce_enable_lua | bool
+        - uac_before.EnableLUA != 1
+      register: uac_enablelua_result
+
+    - name: "[CHECK] 変更後も WinRM 接続が維持されているか確認"
+      ansible.windows.win_ping:
+      register: conn_check
+      retries: 3
+      delay: 10
+      until: conn_check is succeeded
+
+    # --- 再起動要否 ---
+    # ConsentPromptBehaviorAdmin / PromptOnSecureDesktop は即時反映されるが、
+    # EnableLUA の変更だけは再起動しないと反映されない。
+    - name: "再起動を実行（uac_allow_reboot が True の場合のみ）"
+      ansible.windows.win_reboot:
+        reboot_timeout: 1800
+      when:
+        - uac_enablelua_result is defined
+        - uac_enablelua_result is changed
+        - uac_allow_reboot | default(false) | bool
+
+    - name: "再起動が必要である旨を警告（再起動は実施しない）"
+      ansible.builtin.debug:
+        msg: >-
+          EnableLUA を変更したため、UAC を有効にするには再起動が必要です。
+          uac_allow_reboot が False のため再起動は実施していません。
+          （ConsentPromptBehaviorAdmin / PromptOnSecureDesktop は再起動なしで反映されます）
+      when:
+        - uac_enablelua_result is defined
+        - uac_enablelua_result is changed
+        - not (uac_allow_reboot | default(false) | bool)
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を再取得（確認）
+    # =================================================================
+    - name: "[AFTER] UAC の設定を再取得"
+      ansible.windows.win_shell: |
+        $path = '{{ uac_reg_path }}'
+
+        function Get-UacValue($name) {
+          $p = Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue
+          if ($null -eq $p) { return $null }
+          return [int]$p.$name
+        }
+
+        $r = [ordered]@{
+          KeyExists                  = [bool](Test-Path $path)
+          EnableLUA                  = Get-UacValue 'EnableLUA'
+          ConsentPromptBehaviorAdmin = Get-UacValue 'ConsentPromptBehaviorAdmin'
+          PromptOnSecureDesktop      = Get-UacValue 'PromptOnSecureDesktop'
+          ConsentPromptBehaviorUser  = Get-UacValue 'ConsentPromptBehaviorUser'
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: uac_after_raw
+
+    - name: "[AFTER] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        uac_after: "{{ uac_after_raw.stdout | from_json }}"
+
+    - name: "[AFTER] 設定後のレベルを判定"
+      ansible.builtin.set_fact:
+        uac_after_levels: >-
+          {{ uac_levels_norm
+             | selectattr('consent_prompt_behavior_admin', 'eq',
+                          uac_after.ConsentPromptBehaviorAdmin)
+             | selectattr('prompt_on_secure_desktop', 'eq',
+                          uac_after.PromptOnSecureDesktop)
+             | list }}
+
+    - name: "[AFTER] 変更後の設定を表示"
+      ansible.builtin.debug:
+        var: uac_after
+
+    - name: "[AFTER] 設定値が反映されたことを確認"
+      ansible.builtin.assert:
+        that:
+          - uac_after.ConsentPromptBehaviorAdmin == uac_target.consent_prompt_behavior_admin
+          - uac_after.PromptOnSecureDesktop == uac_target.prompt_on_secure_desktop
+          - (uac_after_levels | length) > 0
+          - (uac_after_levels | first).level == uac_target.level
+        success_msg: >-
+          UAC の通知レベルがパラメータシートの値と一致しました
+          (レベル{{ (uac_after_levels | first).level }} / {{ (uac_after_levels | first).label }},
+          ConsentPromptBehaviorAdmin={{ uac_after.ConsentPromptBehaviorAdmin }},
+          PromptOnSecureDesktop={{ uac_after.PromptOnSecureDesktop }})。
+        fail_msg: >-
+          UAC の通知レベルが一致しません
+          (実際: ConsentPromptBehaviorAdmin={{ uac_after.ConsentPromptBehaviorAdmin }},
+          PromptOnSecureDesktop={{ uac_after.PromptOnSecureDesktop }}
+          / 期待: レベル{{ uac_target.level }} = {{ uac_target.consent_prompt_behavior_admin }},
+          {{ uac_target.prompt_on_secure_desktop }})。
+
+    # EnableLUA=0 のままだと、スライダーの位置に関わらず UAC が機能しない。
+    # 設定自体は正しく入っているため失敗にはせず、警告として明示する。
+    - name: "[AFTER] UAC が無効のままである場合に警告"
+      ansible.builtin.debug:
+        msg: >-
+          EnableLUA={{ uac_after.EnableLUA | default('未設定', true) }} のため、
+          UAC 自体が無効な状態です。通知レベルの設定値は書き込まれていますが、
+          有効にするには EnableLUA=1 に設定して再起動する必要があります。
+      when: uac_after.EnableLUA != 1
