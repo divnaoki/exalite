@@ -73,6 +73,9 @@
               DisplayName = $s.DisplayName
               StartType   = $s.StartType.ToString()
               Status      = $s.Status.ToString()
+              # 実行中でも停止を受け付けないサービスがある（例: TabletInputService）。
+              # 判別せずに stop すると「Cannot stop ... service」で失敗するため必ず見る。
+              CanStop     = [bool]$s.CanStop
               Dependents  = @($s.DependentServices | ForEach-Object { $_.Name })
               AllDependents = @(Get-AllDependents $s)
             }
@@ -83,6 +86,7 @@
               DisplayName = $null
               StartType   = $null
               Status      = $null
+              CanStop     = $false
               Dependents  = @()
               AllDependents = @()
             }
@@ -136,12 +140,13 @@
     # =================================================================
     # PHASE 2: 変更（無効化指定 かつ 存在する かつ まだ無効でない場合のみ実行）
     # =================================================================
-    - name: "対象サービスを無効化（停止 + スタートアップの種類=無効）"
+    # 「スタートアップの種類=無効」と「停止」は必ず分けて実行する。
+    # 1タスクで両方指定すると、停止できないサービス（CanStop=false）で
+    # タスク全体が失敗し、起動種別の変更まで巻き添えで適用されなくなるため。
+    - name: "スタートアップの種類を「無効」に設定"
       ansible.windows.win_service:
         name: "{{ item.name }}"
         start_mode: disabled
-        state: stopped
-        force_dependent_services: true
       loop: "{{ target_services }}"
       loop_control:
         label: "{{ item.name }} (現在: {{ svc_before_map[item.name].StartType | default('存在しない') }})"
@@ -150,6 +155,24 @@
         - not (item.enabled | default(false) | bool)
         - svc_before_map[item.name].Exists | bool
         - svc_before_map[item.name].StartType != 'Disabled'
+
+    # 停止は「実行中」かつ「停止を受け付ける」サービスに限定する。
+    # TabletInputService のように実行中でも CanStop=false のものがあり、
+    # 停止を試みると "Cannot stop <name> service on computer '.'" で失敗する。
+    # これらは起動種別を無効にしたうえで、次回再起動時に停止する。
+    - name: "サービスを停止（停止可能なもののみ）"
+      ansible.windows.win_service:
+        name: "{{ item.name }}"
+        state: stopped
+        force_dependent_services: true
+      loop: "{{ target_services }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - not (item.enabled | default(false) | bool)
+        - svc_before_map[item.name].Exists | bool
+        - svc_before_map[item.name].Status == 'Running'
+        - svc_before_map[item.name].CanStop | bool
 
     # --- 無効化直後の接続性確認 ---
     # サービス無効化の影響で WinRM のシェル生成が壊れるケースがあるため、
@@ -193,6 +216,9 @@
               DisplayName = $s.DisplayName
               StartType   = $s.StartType.ToString()
               Status      = $s.Status.ToString()
+              # 実行中でも停止を受け付けないサービスがある（例: TabletInputService）。
+              # 判別せずに stop すると「Cannot stop ... service」で失敗するため必ず見る。
+              CanStop     = [bool]$s.CanStop
               Dependents  = @($s.DependentServices | ForEach-Object { $_.Name })
               AllDependents = @(Get-AllDependents $s)
             }
@@ -203,6 +229,7 @@
               DisplayName = $null
               StartType   = $null
               Status      = $null
+              CanStop     = $false
               Dependents  = @()
               AllDependents = @()
             }
@@ -226,22 +253,42 @@
       ansible.builtin.debug:
         var: svc_after
 
+    # スタートアップの種類が「無効」であることを必須条件とする。
+    # 停止状態は「停止を受け付けるサービス」に対してのみ必須とし、
+    # CanStop=false のものは実行中のままでも合格とする（再起動で停止するため）。
     - name: "[AFTER] 無効化されたことを確認"
       ansible.builtin.assert:
         that:
           - svc_after_map[item.name].StartType == 'Disabled'
-          - svc_after_map[item.name].Status == 'Stopped'
-        success_msg: "{{ item.name }} : 無効化を確認しました。"
+          - >-
+            svc_after_map[item.name].Status == 'Stopped'
+            or (not (svc_after_map[item.name].CanStop | bool))
+        success_msg: >-
+          {{ item.name }} : 無効化を確認しました
+          (StartType={{ svc_after_map[item.name].StartType }},
+          Status={{ svc_after_map[item.name].Status }})。
         fail_msg: >-
           {{ item.name }} : 無効化されていません
           (StartType={{ svc_after_map[item.name].StartType }},
-          Status={{ svc_after_map[item.name].Status }})
+          Status={{ svc_after_map[item.name].Status }},
+          CanStop={{ svc_after_map[item.name].CanStop }})
       loop: "{{ target_services }}"
       loop_control:
         label: "{{ item.name }}"
       when:
         - not (item.enabled | default(false) | bool)
         - svc_after_map[item.name].Exists | bool
+
+    - name: "[AFTER] 停止できず実行中のまま残ったサービスを報告"
+      ansible.builtin.debug:
+        msg: >-
+          以下のサービスは停止を受け付けないため、スタートアップの種類のみ「無効」に設定しました。
+          プロセスは次回の再起動まで実行されたままになります:
+          {{ svc_after | selectattr('Exists') | selectattr('Status', 'eq', 'Running')
+             | map(attribute='Name') | list }}
+      when: >-
+        (svc_after | selectattr('Exists') | selectattr('Status', 'eq', 'Running')
+         | list | length) > 0
 
     - name: "[AFTER] 存在しなかったサービスを報告"
       ansible.builtin.debug:
