@@ -338,9 +338,24 @@
       when: >-
         (feat_after | selectattr('Exists') | selectattr('Pending') | list | length) > 0
 
-    - name: "[AFTER] 存在しなかった機能を報告"
+    # --- スキップした機能の最終報告 ---
+    # 対象サーバーに存在しない機能（OS/エディション差異、役割未追加など）は
+    # PHASE 2 でエラーにせずスキップしている。見落とすと「設定したつもり」に
+    # なるため、0件でも必ず最後に件数を出力する。
+    - name: "[AFTER] 存在しないためスキップした機能を報告（件数）"
       ansible.builtin.debug:
         msg: >-
-          以下の機能は対象サーバーに存在しないためスキップしました:
-          {{ feat_after | rejectattr('Exists') | map(attribute='Name') | list }}
-      when: (feat_after | rejectattr('Exists') | list | length) > 0
+          対象サーバーに存在しないためスキップした機能: {{ feat_missing | length }} 件
+          {{ feat_missing if (feat_missing | length) > 0 else '（該当なし：指定した機能は全て対象サーバーに存在しました）' }}
+      vars:
+        feat_missing: "{{ feat_after | rejectattr('Exists') | map(attribute='Name') | list }}"
+
+    - name: "[AFTER] 存在しないためスキップした機能を報告（明細）"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.name }} / {{ item.label | default('') }} :
+          対象サーバーに存在しないためスキップしました（指定値={{ item.enabled }}）。
+      loop: "{{ features }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: not (feat_after_map[item.name].Exists | bool)
