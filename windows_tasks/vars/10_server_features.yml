@@ -1,0 +1,173 @@
+# =====================================================================
+# 10_サーバーの役割と機能 : 変数定義
+#
+# Exastro のパラメータシートは「役割・機能レコード」に対して
+# True / False が定義される想定。1レコード = 1機能として下記の形で渡す。
+#
+#   target_features:
+#     - name: "SNMP-Service"   # Get-WindowsFeature の Name（表示名ではない）
+#       label: "SNMP サービス" # 画面表示名（ログ表示用。処理には使わない）
+#       enabled: True          # True = インストール / False = アンインストール
+#
+# ※ Exastro からは値が文字列で渡るため、Playbook 側は全て `| bool` で評価している。
+# ※ 対象サーバーに存在しない機能（OS/エディションによる差異）はエラーにせずスキップする。
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# 対象の役割と機能（チェックシート No.1〜31 の並び順）
+#
+# enabled の値は「Windows Server 2022 の既定状態（基本規定値）」を初期値として
+# 記載している。本番適用時は必ずパラメータシートの確定値に置き換えること。
+#
+# 【並び順の意味】
+#   インストールは上（親）から、アンインストールは下（子）から実行する。
+#   親を先に削除すると子が巻き添えで消えて後続の判定がずれるため、
+#   Playbook 側でアンインストール時のみリストを逆順にしている。
+# ---------------------------------------------------------------------
+target_features:
+  # --- No.1-2 ファイルサービスと記憶域サービス ---
+  - name: "FileAndStorage-Services"      # No.1  ファイルサービスと記憶域サービス
+    label: "ファイルサービスと記憶域サービス"
+    enabled: True
+  - name: "Storage-Services"             # No.2    記憶域サービス
+    label: "記憶域サービス"
+    enabled: True
+
+  # --- No.3-6 .NET Framework 3.5 ---
+  # !!! 注意 !!! .NET Framework 3.5 系は既定で InstallState=Removed（ペイロード削除済み）。
+  # インストールするには feature_source にインストールメディアの SxS パスが必要。
+  - name: "NET-Framework-Features"       # No.3  .NET Framework 3.5 Features
+    label: ".NET Framework 3.5 Features"
+    enabled: False
+  - name: "NET-Framework-Core"           # No.4    .NET Framework 3.5(.NET 2.0/3.0 を含む)
+    label: ".NET Framework 3.5(.NET 2.0 および 3.0 を含む)"
+    enabled: False
+  - name: "NET-HTTP-Activation"          # No.5    HTTP アクティブ化
+    label: "HTTP アクティブ化(3.5)"
+    enabled: False
+  - name: "NET-Non-HTTP-Activ"           # No.6    非 HTTP アクティブ化
+    label: "非 HTTP アクティブ化(3.5)"
+    enabled: False
+
+  # --- No.7-15 .NET Framework 4.8 ---
+  - name: "NET-Framework-45-Features"    # No.7  .NET Framework 4.8 Features
+    label: ".NET Framework 4.8 Features"
+    enabled: True
+  - name: "NET-Framework-45-Core"        # No.8    .NET Framework 4.8
+    label: ".NET Framework 4.8"
+    enabled: True
+  - name: "NET-Framework-45-ASPNET"      # No.9    ASP.NET 4.8
+    label: "ASP.NET 4.8"
+    enabled: False
+  - name: "NET-WCF-Services45"           # No.10   WCF サービス
+    label: "WCF サービス"
+    enabled: True
+  - name: "NET-WCF-HTTP-Activation45"    # No.11     HTTP アクティブ化
+    label: "HTTP アクティブ化(WCF)"
+    enabled: False
+  - name: "NET-WCF-TCP-Activation45"     # No.12     TCP アクティブ化
+    label: "TCP アクティブ化(WCF)"
+    enabled: False
+  - name: "NET-WCF-TCP-PortSharing45"    # No.13     TCP ポート共有
+    label: "TCP ポート共有(WCF)"
+    enabled: True
+  - name: "NET-WCF-MSMQ-Activation45"    # No.14     メッセージキュー(MSMQ)アクティブ化
+    label: "メッセージキュー(MSMQ)アクティブ化"
+    enabled: False
+  - name: "NET-WCF-Pipe-Activation45"    # No.15     名前付きパイプのアクティブ化
+    label: "名前付きパイプのアクティブ化"
+    enabled: False
+
+  # --- No.16-19 Azure Arc / Defender / SNMP ---
+  # AzureArcSetup は OS のビルドによっては存在しない（存在しなければスキップされる）。
+  # 閉域網では Azure への接続自体が対象外になるため、パラメータシートの値に従うこと。
+  - name: "AzureArcSetup"                # No.16 Azure Arc Setup
+    label: "Azure Arc Setup"
+    enabled: False
+  - name: "Windows-Defender"             # No.17 Microsoft Defender ウイルス対策
+    label: "Microsoft Defender ウイルス対策"
+    enabled: True
+  - name: "SNMP-Service"                 # No.18 SNMP サービス
+    label: "SNMP サービス"
+    enabled: False
+  - name: "SNMP-WMI-Provider"            # No.19   WMI SNMP プロバイダー
+    label: "WMI SNMP プロバイダー"
+    enabled: False
+
+  # --- No.20-24 Windows PowerShell ---
+  # !!! 重要 !!! PowerShellRoot / PowerShell を False にすると WinRM 経由の
+  # 接続そのものが失われる。protected_features のガードで弾いている。
+  - name: "PowerShellRoot"               # No.20 Windows PowerShell
+    label: "Windows PowerShell"
+    enabled: True
+  - name: "PowerShell"                   # No.21   Windows PowerShell 5.1
+    label: "Windows PowerShell 5.1"
+    enabled: True
+  - name: "PowerShell-V2"                # No.22   Windows PowerShell 2.0 エンジン
+    label: "Windows PowerShell 2.0 エンジン"
+    enabled: False
+  - name: "DSC-Service"                  # No.23   Windows PowerShell DSC Service
+    label: "Windows PowerShell Desired State Configuration Service"
+    enabled: False
+  - name: "WindowsPowerShellWebAccess"   # No.24   Windows PowerShell Web Access
+    label: "Windows PowerShell Web Access"
+    enabled: False
+
+  # --- No.25-28 その他の機能 ---
+  - name: "Windows-Server-Backup"        # No.25 Windows Server バックアップ
+    label: "Windows Server バックアップ"
+    enabled: False
+  - name: "WoW64-Support"                # No.26 WoW64 サポート
+    label: "WoW64 サポート"
+    enabled: True
+  - name: "XPS-Viewer"                   # No.27 XPS Viewer
+    label: "XPS Viewer"
+    enabled: False
+  - name: "System-DataArchiver"          # No.28 システム データ アーカイバー
+    label: "システム データ アーカイバー"
+    enabled: True
+
+  # --- No.29-31 リモートサーバー管理ツール ---
+  - name: "RSAT"                         # No.29 リモートサーバー管理ツール
+    label: "リモートサーバー管理ツール"
+    enabled: True
+  - name: "RSAT-Feature-Tools"           # No.30   機能管理ツール
+    label: "機能管理ツール"
+    enabled: True
+  - name: "RSAT-SNMP"                    # No.31     SNMP ツール
+    label: "SNMP ツール"
+    enabled: False
+
+# =====================================================================
+# 保護対象の役割と機能（アンインストールを禁止するガードリスト）
+#
+# ここに含まれる機能が enabled: False で指定された場合、
+# 1件も変更せずに PHASE 2 の手前で異常終了する。
+# PowerShell / WoW64 を削除すると Ansible(WinRM) の接続経路が失われ、
+# 復旧に仮想マシンのコンソール操作が必要になるため。
+# =====================================================================
+protected_features:
+  - "PowerShellRoot"           # Windows PowerShell 本体（WinRM の実行基盤）
+  - "PowerShell"               # Windows PowerShell 5.1
+  - "WoW64-Support"            # 32bit サブシステム（削除不可に近い基盤機能）
+  - "FileAndStorage-Services"  # ファイル共有・記憶域の基盤
+  - "Storage-Services"         # 削除するとディスク管理が機能しない
+
+# =====================================================================
+# 動作オプション
+# =====================================================================
+
+# .NET Framework 3.5 のようにペイロードが削除済み(InstallState=Removed)の機能を
+# インストールする際に参照するソースパス。
+# 例: '\\fileserver\media\sources\sxs' / 'D:\sources\sxs'
+# 空文字のままなら win_feature には渡さない（Windows Update から取得を試みる）。
+feature_source: ""
+
+# 役割・機能に付随する管理ツールを一緒に導入するか。
+# チェックシートは RSAT 系(No.29-31)も明示的に管理しているため、
+# 意図しない機能が増えないよう既定は False（厳密制御）にしている。
+feature_include_management_tools: False
+
+# 再起動が必要になった場合に Playbook 内で再起動まで行うか。
+# False の場合は再起動せず、要再起動である旨を警告表示して終了する。
+feature_allow_reboot: False
