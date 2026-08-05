@@ -1,0 +1,121 @@
+---
+# =====================================================================
+# 09_SMB マルチチャネル 設定
+#
+# 構成ルール:
+#   PHASE 1  変更前の設定情報を取得（必ず取得）
+#   PHASE 2  現在値と異なる場合のみ変更を実行（冪等）
+#   PHASE 3  変更後の設定情報を再取得して確認
+#
+# 設定値は vars/09_smb_multichannel.yml で定義。
+# Exastro のパラメータシートからは extra-vars で True/False を渡す。
+# Exastro は値を文字列で渡すため判定は `| bool` を通している。
+#
+# 【実装方式について】
+# SmbServerConfiguration を扱う専用モジュールは ansible.windows /
+# community.windows のいずれにも存在しない（win_share は共有の管理用）。
+# そのため win_shell + Set-SmbServerConfiguration を使用する。
+#
+# 【対象範囲】
+# 本 Playbook はサーバー側設定（Get/Set-SmbServerConfiguration）のみを扱う。
+# クライアント側（Get/Set-SmbClientConfiguration）は対象外。
+# =====================================================================
+- name: "09_SMB マルチチャネル 設定"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/09_smb_multichannel.yml
+
+  vars:
+    reg_lanman: 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+
+  tasks:
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得
+    # =================================================================
+    - name: "[BEFORE] SMB サーバー設定の現在値を取得"
+      ansible.windows.win_shell: |
+        $c = Get-SmbServerConfiguration
+        $reg = '{{ reg_lanman }}'
+        # 実体のレジストリ値は EnableMultiChannel ではなく DisableMultiChannel（名前が反転）
+        $regVal = (Get-ItemProperty -Path $reg -Name DisableMultiChannel -ErrorAction SilentlyContinue).DisableMultiChannel
+        $r = [ordered]@{
+          EnableMultiChannel = [bool]$c.EnableMultiChannel
+          # 既定（有効）では値が存在しない。無効にすると DisableMultiChannel=1 が作成される
+          Raw_DisableMultiChannel = $(if ($null -eq $regVal) { $null } else { [int]$regVal })
+          RegValuePresent         = ($null -ne $regVal)
+          LanmanServerStatus = (Get-Service LanmanServer).Status.ToString()
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: smb_before_raw
+
+    - name: "[BEFORE] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        smb_before: "{{ smb_before_raw.stdout | from_json }}"
+
+    - name: "[BEFORE] 現在設定を表示"
+      ansible.builtin.debug:
+        var: smb_before
+
+    - name: "[BEFORE] 設定予定値（パラメータシート値）を表示"
+      ansible.builtin.debug:
+        msg:
+          - "EnableMultiChannel : {{ smb_before.EnableMultiChannel }} -> {{ smb_enable_multichannel | bool }} (指定値: {{ smb_enable_multichannel }})"
+          - "実体レジストリ     : DisableMultiChannel={{ smb_before.Raw_DisableMultiChannel | default('値なし(=既定で有効)', true) }}"
+
+    # =================================================================
+    # PHASE 2: 変更（現在値と異なる場合のみ実行）
+    # =================================================================
+    # -Force / -Confirm:$false は非対話実行での確認プロンプト抑止に必須。
+    # 付けないとプロンプト待ちでタスクが失敗する。
+    - name: "SMB マルチチャネルを設定 (EnableMultiChannel)"
+      ansible.windows.win_shell: |
+        Set-SmbServerConfiguration -EnableMultiChannel ${{ 'true' if (smb_enable_multichannel | bool) else 'false' }} -Force -Confirm:$false
+      args:
+        executable: powershell
+      when: (smb_before.EnableMultiChannel | bool) != (smb_enable_multichannel | bool)
+      changed_when: true
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を再取得（確認）
+    # =================================================================
+    - name: "[AFTER] SMB サーバー設定を再取得"
+      ansible.windows.win_shell: |
+        $c = Get-SmbServerConfiguration
+        $reg = '{{ reg_lanman }}'
+        # 実体のレジストリ値は EnableMultiChannel ではなく DisableMultiChannel（名前が反転）
+        $regVal = (Get-ItemProperty -Path $reg -Name DisableMultiChannel -ErrorAction SilentlyContinue).DisableMultiChannel
+        $r = [ordered]@{
+          EnableMultiChannel = [bool]$c.EnableMultiChannel
+          Raw_DisableMultiChannel = $(if ($null -eq $regVal) { $null } else { [int]$regVal })
+          RegValuePresent         = ($null -ne $regVal)
+          LanmanServerStatus = (Get-Service LanmanServer).Status.ToString()
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: smb_after_raw
+
+    - name: "[AFTER] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        smb_after: "{{ smb_after_raw.stdout | from_json }}"
+
+    - name: "[AFTER] 変更後の設定を表示"
+      ansible.builtin.debug:
+        var: smb_after
+
+    - name: "[AFTER] 設定値が反映されたことを確認"
+      ansible.builtin.assert:
+        that:
+          - (smb_after.EnableMultiChannel | bool) == (smb_enable_multichannel | bool)
+        success_msg: >-
+          SMB マルチチャネルの設定がパラメータシートの値と一致しました
+          (EnableMultiChannel={{ smb_after.EnableMultiChannel }})。
+        fail_msg: >-
+          設定値が一致しません
+          (実際={{ smb_after.EnableMultiChannel }} / 期待={{ smb_enable_multichannel | bool }})。

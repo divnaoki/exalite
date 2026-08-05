@@ -1,0 +1,76 @@
+# =====================================================================
+# 07_サービス無効化 : 変数定義
+#
+# Exastro のパラメータシートは「対象サービス名レコード」に対して
+# False が定義される想定。1レコード = 1サービスとして下記の形で渡す。
+#
+#   target_services:
+#     - name: "Spooler"      # サービス名（表示名ではなく "サービス名"）
+#       enabled: False       # False = 無効化する
+#
+# ※ 本Playbookは「無効化専用」。
+#   enabled が True のレコードは何もせずスキップする（有効化はしない）。
+#   値は Exastro から文字列で渡るため Playbook 側で `| bool` 評価している。
+# =====================================================================
+
+# !!! 重要 !!!
+# ここは「本業のパラメータシートで確定した対象サービス名」に置き換えること。
+#
+# 【対象選定の方針】
+# 他サービスに影響を与えないものだけを対象にする。
+# 追加前に必ず依存関係を確認し、Dependents（自分に依存しているサービス）が
+# 空であることを確かめること。確認コマンド:
+#   Get-Service <名前> | Select-Object -ExpandProperty DependentServices
+#
+# 【実績のある注意点】
+# 検証環境で Spooler / RemoteRegistry / WerSvc / WpnService を無効化したところ、
+# 直後は正常だったが以後 WinRM のシェル生成が RPC エラーで失敗し接続不能になった。
+# 稼働中のサービスを新たに追加する場合は、まず1件ずつ実行し
+# [CHECK] タスクで接続が維持されることを確認しながら進めること。
+#
+# 下記は Bluetooth 関連。Server 2022 に実在するのは bthserv のみで、
+# Dependents / DependsOn ともに空＝他サービスへの影響なしを実機で確認済み。
+# 残り3件はクライアントOS用のため Server 2022 には存在せず、スキップされる。
+target_services:
+  - name: "bthserv"              # Bluetooth サポート サービス
+    enabled: False
+  - name: "BTAGService"          # Bluetooth Audio Gateway Service（Server には無し）
+    enabled: False
+  - name: "BthAvctpSvc"          # AVCTP service（Server には無し）
+    enabled: False
+  - name: "BluetoothUserService" # Bluetooth ユーザー サポート サービス（Server には無し）
+    enabled: False
+
+# =====================================================================
+# 保護対象サービス（無効化を禁止するガードリスト）
+#
+# ここに含まれるサービスが target_services に指定された場合、
+# 1台も変更せずに PHASE 2 の手前で異常終了する。
+# WinRM / RpcSs / Winmgmt を無効化すると Ansible の接続自体が失われ、
+# 復旧に仮想マシンのコンソール操作が必要になるため。
+# =====================================================================
+protected_services:
+  - "WinRM"                  # Ansible の接続経路そのもの
+  - "RpcSs"                  # Remote Procedure Call（大半のサービスが依存）
+  - "RpcEptMapper"
+  - "DcomLaunch"
+  - "Winmgmt"                # WMI（Ansible のモジュールが使用）
+  - "EventLog"
+  - "CryptSvc"
+  - "BFE"                    # Base Filtering Engine
+  - "mpssvc"                 # Windows Defender Firewall
+  - "Dnscache"
+  - "Dhcp"
+  - "nsi"
+  - "netprofm"
+  - "NlaSvc"
+  - "LanmanWorkstation"
+  - "LanmanServer"
+  - "SamSs"
+  - "gpsvc"
+  - "ProfSvc"
+  - "PlugPlay"
+  - "Power"
+  - "BrokerInfrastructure"
+  - "KeyIso"
+  - "Schedule"
