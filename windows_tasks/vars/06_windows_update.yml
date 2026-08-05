@@ -1,0 +1,51 @@
+# =====================================================================
+# 06_WindowsUpdate : 変数定義
+#
+# Exastro のパラメータシートから True / False で渡す想定。
+# Exastro は値を「文字列」で渡すため、Playbook 側は全て `| bool` で
+# 評価している（"True"/"False"/"true"/"false"/1/0 いずれも解釈可能）。
+#
+# Exastro から上書きする場合は extra-vars が最優先で効くため、
+# このファイルの値は「デフォルト値」として機能する。
+#   例) ansible-playbook 06_windows_update.yml -e "wu_auto_update_enabled=False"
+# =====================================================================
+
+# --- 自動更新 ---
+# true  : 自動更新を有効化（NoAutoUpdate = 0）
+# false : 自動更新を無効化（NoAutoUpdate = 1）※サーバーは手動更新運用が一般的
+wu_auto_update_enabled: false
+
+# --- 自動再起動 ---
+# true  : 更新後に自動再起動する（NoAutoRebootWithLoggedOnUsers = 0）
+# false : ログオン中のユーザーがいる場合は自動再起動しない（= 1）
+wu_auto_reboot_enabled: false
+
+# --- 他の Microsoft 製品の更新プログラム（Microsoft Update オプトイン）---
+# true  : Microsoft Update サービスを登録（Office 等も更新対象に含める）
+# false : 登録解除（Windows のみ）
+wu_microsoft_update_enabled: true
+
+# --- 品質更新プログラムへのドライバー含有 ---
+# true  : ドライバーを含める（ExcludeWUDriversInQualityUpdate = 0）
+# false : ドライバーを除外する（= 1）
+wu_include_drivers: false
+
+# --- 配信の最適化（Delivery Optimization）---
+# true  : 有効（DODownloadMode = 1 / 同一 LAN 内の PC からも取得）
+# false : 無効（DODownloadMode = 0 / HTTP のみ・他 PC とは共有しない）
+wu_delivery_optimization_enabled: false
+
+# --- Windows Update サービス（wuauserv）---
+# true  : スタートアップの種類=手動 + 起動（Windows 既定の状態）
+# false : スタートアップの種類=無効 + 停止
+wu_service_enabled: true
+
+# =====================================================================
+# 補助パラメータ（True/False ではない値）
+# =====================================================================
+# 自動更新の動作モード（wu_auto_update_enabled = true のときのみ適用）
+#   2 = ダウンロードとインストールを通知
+#   3 = 自動ダウンロードしインストールを通知
+#   4 = 自動ダウンロードしインストール日時を指定
+#   5 = ローカル管理者による設定を許可
+wu_au_options: 3

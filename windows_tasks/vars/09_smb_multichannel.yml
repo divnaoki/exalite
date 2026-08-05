@@ -1,0 +1,20 @@
+# =====================================================================
+# 09_SMB マルチチャネル : 変数定義
+#
+# Exastro のパラメータシートから True / False で渡す想定。
+# Exastro は値を文字列で渡すため、Playbook 側は `| bool` で評価している。
+#
+# ★ここは反転していない。設定値がそのまま EnableMultiChannel になる。
+#   （08_local_policy の「有効/無効」はポリシー自体の有効無効を指すため別物）
+#
+#   False = SMB マルチチャネルを無効にする（今回の設定値）
+#   True  = SMB マルチチャネルを有効にする（Windows 既定）
+# =====================================================================
+
+# Get-SmbServerConfiguration > EnableMultiChannel
+#   実体: HKLM\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters
+#         DisableMultiChannel (DWORD)  ★名前が反転しているので注意
+#   ※既定（有効）では値そのものが存在しない。
+#     False を設定すると DisableMultiChannel=1 が作成される（実機確認済み）。
+#     レジストリで直接エビデンスを取る場合はこの名前を見ること。
+smb_enable_multichannel: False

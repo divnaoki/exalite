@@ -1,0 +1,38 @@
+# =====================================================================
+# 05_ネットワーク接続 : 変数定義
+# ※ IP 等の環境依存値は「要確定」を実値に置き換えてから実行すること
+# =====================================================================
+
+# --- アダプター識別 / 名称 ---
+nic1_current_name: "ServerLAN"        # 変更前のNICアダプター表示名（例: イーサネット）
+nic1_display_name: "ServerLAN"        # 変更後のNICアダプター表示名（例: ServerLAN）
+nic1_adapter_description: "Intel(R) 82574L Gigabit Network Connection"  # WMI Description（NIC特定用）
+
+# --- IPv4 ---
+nic1_ipv4_dhcp_enabled: false         # true=DHCP / false=固定IP
+nic1_ipv4_address: "要確定"           # 例: 192.168.10.10
+nic1_ipv4_prefix_length: 24           # サブネットマスクのCIDR表記（255.255.255.0 → 24）
+nic1_ipv4_subnet_mask: "255.255.255.0" # 参考値（実設定は prefix_length を使用）
+nic1_ipv4_gateway: "要確定"           # 例: 192.168.10.1
+
+# --- DNS ---
+nic1_dns_auto_obtain: false           # true=自動取得 / false=手動
+nic1_dns_preferred: "要確定"          # 優先DNS
+nic1_dns_alternate: "要確定"          # 代替DNS
+nic1_dns_register_address: true       # この接続のアドレスをDNSに登録
+
+# --- インターフェイスメトリック ---
+nic1_interface_metric_auto: true      # true=自動 / false=手動
+nic1_interface_metric_value: 10       # 手動時のメトリック値（auto=false のときのみ使用）
+
+# --- WINS / LMHOSTS / NetBIOS ---
+nic1_wins_address: ""                 # WINSサーバー（未使用なら空文字）
+nic1_wins_lmhosts_enabled: false      # LMHOSTS参照
+nic1_netbios_setting: 0               # 0=既定値 / 1=有効 / 2=無効
+
+# --- コンポーネント（バインディング）---
+nic1_component_multiplexor_enabled: true    # Microsoft Network Adapter Multiplexor Protocol (ms_implat)
+nic1_component_lldp_enabled: true           # Microsoft LLDP Protocol Driver (ms_lldp)
+nic1_component_ipv6_enabled: false          # TCP/IPv6 (ms_tcpip6)（閉域網のため無効化方針）
+nic1_component_lltd_responder_enabled: true # LLTD Responder (ms_rspndr)
+nic1_component_lltd_mapper_enabled: true    # LLTD Mapper I/O Driver (ms_lltdio)
