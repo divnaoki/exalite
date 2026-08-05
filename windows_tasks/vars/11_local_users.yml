@@ -32,8 +32,8 @@
 # ---------------------------------------------------------------------
 local_users:
   # --- 新しいユーザー（パラメータシート「新しいユーザー」の行）---
-  # パスワードはパラメータシートには記載せず、Exastro の機密パラメータから
-  # local_user_passwords で渡すこと（下部の定義を参照）。
+  # パスワードはここには書かない。server_admin_accounts の
+  # 「同じユーザー名のレコード」から取得する（下部の説明を参照）。
   - name: "mgprtsvadm01"
     label: "新しいユーザー"
     create: True
@@ -47,11 +47,11 @@ local_users:
       - "Administrators"
 
   # --- Administrator のプロパティ ---
-  # !!! 重要 !!! account_disabled: True は「既定の Administrator を無効化する」指定。
-  # Ansible がこのアカウントで接続している場合、無効化した時点で以降の接続が
-  # 失われるため、Playbook では最後のタスクに回している。
-  # 既定では実行せずスキップし、allow_disable_connection_account: True を
-  # 明示したときだけ実行する。
+  # account_disabled: True は「既定の Administrator を無効化する」指定。
+  # Ansible は各サービスの管理者ユーザー（mgprtsvadm01 等）で接続するため、
+  # 無効化しても接続は失われない。
+  # ただし万一 Administrator で接続している状態で実行した場合は、
+  # Playbook 側のガード（接続アカウント自身の無効化検出）で中止する。
   - name: "Administrator"
     label: "Administrator のプロパティ"
     create: False
@@ -76,30 +76,32 @@ local_users:
 # =====================================================================
 # パスワード（機密情報）
 #
-# !!! 重要 !!! ここに実際のパスワードを書いてコミットしないこと。
-# Exastro の機密パラメータ、または ansible-vault / extra-vars で渡す。
-#   例) ansible-playbook 11_local_users.yml \
-#         -e '{"local_user_passwords":{"mgprtsvadm01":"<パスワード>"}}'
+# 新規作成時のパスワードは、既存ロールと同じ server_admin_accounts から
+# 「パラメータシートのユーザー名と同じキー」で取得する。
 #
+#   server_admin_accounts:
+#     mgvbaseadm01: "＜パスワード＞"
+#     mgprtsvadm01: "＜パスワード＞"     # ← local_users の name と一致するキー
+#     ...
+#
+# !!! 重要 !!! このファイルには server_admin_accounts を定義していない。
+# 定義するとロールの defaults/main.yml より vars_files が優先され、
+# 本来のパスワード定義を上書きしてしまうため。
+# 以下のいずれかで渡すこと（どちらでも Playbook から参照できる）。
+#   - ロールの defaults/main.yml など既存の変数ファイル
+#   - Exastro の機密パラメータ / extra-vars
+#     例) -e '{"server_admin_accounts":{"mgprtsvadm01":"＜パスワード＞"}}'
+#
+# 補足:
 # - create: True のユーザーが「対象サーバーに存在しない」場合のみ必須。
 #   （既に存在する場合はパスワードを変更しない: update_password=on_create）
+# - 該当キーが無い場合は、1件も変更しないうちにガードで中止する。
 # - パスワードを扱うタスクには no_log: true を設定しており、ログには出力されない。
 # =====================================================================
-local_user_passwords: {}
 
 # =====================================================================
 # 動作オプション
 # =====================================================================
-
-# Ansible が接続しているアカウント自身を無効化することを許可するか。
-#
-# False（既定）: 接続アカウントの無効化はスキップし、警告のみ出力する。
-#                他の管理者アカウント（mgprtsvadm01）で接続し直してから
-#                再実行するのが安全な運用手順。
-# True         : 全ての設定・確認が終わった最後のタスクとして無効化する。
-#                実行した時点で以降その資格情報では接続できなくなるため、
-#                Exastro のインベントリを新しい管理者アカウントに切り替えること。
-allow_disable_connection_account: False
 
 # 「所属するグループ」の扱い。
 # シートの指定は「追加」のみのため add 固定（既存の所属は削除しない）。

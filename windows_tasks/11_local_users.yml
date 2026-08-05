@@ -7,7 +7,6 @@
 #   PHASE 1  変更前の設定情報を取得（必ず取得）
 #   PHASE 2  現在値と異なる場合のみ変更を実行（冪等）
 #   PHASE 3  変更後の設定情報を再取得して確認
-#   PHASE 4  接続アカウント自身の無効化（許可された場合のみ最後に実行）
 #
 # 前提:
 #   - Exastro のパラメータシートからユーザーごとに各項目の True/False が渡る。
@@ -15,6 +14,11 @@
 #   - 対象サーバーに存在しないユーザーはエラーにせずスキップする
 #     （create: True のレコードのみ新規作成する）。
 #   - 「所属するグループ」は追加のみ。既存の所属は削除しない。
+#   - 新規作成時のパスワードは server_admin_accounts から
+#     「パラメータシートのユーザー名と同じキー」で取得する。
+#   - Ansible は Administrator ではなく各サービスの管理者ユーザーで接続する運用。
+#     そのため Administrator の無効化は他の項目と同じ流れで実行できる。
+#     万一「接続アカウント自身の無効化」が指定された場合は PHASE 1 のガードで中止する。
 #
 # 【4つのチェックボックスと実体の対応】
 #   ユーザーは次回ログオン時にパスワードの変更が必要 : PasswordExpired = 1
@@ -176,12 +180,12 @@
 
     # --- 実行計画の作成 ---
     # 「指定値」と「現在値」を突き合わせ、ユーザーごとに何を変更するか確定させる。
-    #   create_needed  : create: True かつ 未作成          -> 新規作成する
-    #   flags_change   : 4項目のいずれかが現在値と異なる    -> 変更する
-    #   groups_to_add  : 未所属の指定グループ              -> 追加する
-    #   disable_now    : 無効化が必要（接続アカウント以外） -> PHASE 2 で無効化
-    #   disable_defer  : 無効化が必要（接続アカウント自身） -> PHASE 4 で無効化
-    #   disable_skip   : 無効化が必要だが許可されていない   -> 実行しない（警告）
+    #   create_needed         : create: True かつ 未作成       -> 新規作成する
+    #   flags_change          : 4項目のいずれかが現在値と異なる -> 変更する
+    #   groups_to_add         : 未所属の指定グループ           -> 追加する
+    #   skip_missing          : 存在せず create も False       -> 何もしない
+    #   is_connection_account : Ansible の接続アカウント自身
+    #                           （無効化指定されていたらガードで中止する）
     - name: "[PLAN] ユーザーごとの実行内容を確定"
       ansible.builtin.set_fact:
         user_plan: >-
@@ -204,6 +208,7 @@
                  ((users_before_map[item.name].MustChangePassword | bool) != item.must_change_password)
                  or ((users_before_map[item.name].CannotChangePassword | bool) != item.cannot_change_password)
                  or ((users_before_map[item.name].PasswordNeverExpires | bool) != item.password_never_expires)
+                 or ((users_before_map[item.name].Disabled | bool) != item.account_disabled)
                ),
                'groups_to_add': (
                  dict(item.groups | map('lower') | zip(item.groups)) | dict2items
@@ -251,16 +256,37 @@
       loop_control:
         label: "{{ item.name }}"
 
-    # 新規作成にはパスワードが必須。未指定のまま実行すると win_user が失敗するため
-    # 1件も変更しないうちに中止する。値そのものは no_log で出力しない。
-    - name: "[GUARD] 新規作成対象のパスワードが指定されているか検証"
+    # --- 接続アカウント自身の無効化ガード ---
+    # 本環境では Administrator ではなく専用の管理者ユーザーで接続する運用のため、
+    # 通常このガードには掛からない。掛かる場合は接続情報かパラメータシートの
+    # どちらかが誤っているので、1件も変更しないうちに中止する。
+    # （接続アカウントを無効化すると以降 WinRM で接続できなくなる）
+    - name: "[GUARD] 接続アカウント自身が無効化指定されていないか検証"
       ansible.builtin.assert:
         that:
-          - (local_user_passwords[item.name] | default('') | string | length) > 0
-        success_msg: "{{ item.name }} : パスワードが指定されています。"
+          - not (user_plan_map[item.name].is_connection_account and item.account_disabled)
+        success_msg: "{{ item.name }} : 接続アカウントの無効化指定はありません。"
         fail_msg: >-
-          {{ item.name }} : 新規作成するにはパスワードの指定が必要です。
-          Exastro の機密パラメータ等で local_user_passwords.{{ item.name }} を渡してください。
+          {{ item.name }} は Ansible の接続アカウント({{ connected_as }})自身であり、
+          「アカウントを無効にする」が True に指定されています。
+          無効化すると以降このサーバーへ接続できなくなるため中止しました。
+          別の管理者アカウントで接続するか、パラメータシートの指定を見直してください。
+      loop: "{{ users }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # 新規作成にはパスワードが必須。未指定のまま実行すると win_user が失敗するため
+    # 1件も変更しないうちに中止する。値そのものは no_log で出力しない。
+    - name: "[GUARD] 新規作成対象のパスワードが取得できるか検証"
+      ansible.builtin.assert:
+        that:
+          - ((server_admin_accounts | default({}))[item.name] | default('') | string | length) > 0
+        success_msg: "{{ item.name }} : パスワードを取得できました。"
+        fail_msg: >-
+          {{ item.name }} : 新規作成にはパスワードが必要ですが、
+          server_admin_accounts に同名のレコードがありません。
+          変数ファイル（またはExastroの機密パラメータ）に
+          「{{ item.name }}: パスワード」の行があるか確認してください。
       loop: "{{ user_plan }}"
       loop_control:
         label: "{{ item.name }}"
@@ -271,12 +297,13 @@
     # PHASE 2: 変更（現在値と異なる場合のみ実行）
     # =================================================================
     # --- 新規ユーザーの作成 ---
+    # パスワードは server_admin_accounts から「ユーザー名と同じキー」で取得する。
     # update_password: on_create のため、既存ユーザーのパスワードは変更しない。
     # 作成と同時に4項目とグループ所属も設定する。
     - name: "新しいユーザーを作成"
       ansible.windows.win_user:
         name: "{{ item.name }}"
-        password: "{{ local_user_passwords[item.name] }}"
+        password: "{{ server_admin_accounts[item.name] }}"
         update_password: on_create
         state: present
         fullname: "{{ item.fullname | default('') | ternary(item.fullname | default(''), omit) }}"
@@ -295,14 +322,17 @@
       no_log: true
 
     # --- 既存ユーザーのプロパティ変更 ---
-    # 「アカウントを無効にする」はここでは扱わない（接続断を避けるため後続タスクで実施）。
-    - name: "既存ユーザーのプロパティを変更（無効化を除く3項目）"
+    # 4項目のいずれかが現在値と異なる場合のみ実行する。
+    # 接続アカウント自身の無効化は PHASE 1 のガードで弾いているため、
+    # ここで接続が切れることはない。
+    - name: "既存ユーザーのプロパティを変更（4項目）"
       ansible.windows.win_user:
         name: "{{ item.name }}"
         state: present
         password_expired: "{{ item.must_change_password }}"
         user_cannot_change_password: "{{ item.cannot_change_password }}"
         password_never_expires: "{{ item.password_never_expires }}"
+        account_disabled: "{{ item.account_disabled }}"
       loop: "{{ users }}"
       loop_control:
         label: "{{ item.name }} / {{ item.label | default('') }}"
@@ -324,20 +354,6 @@
       when:
         - user_plan_map[item.name].exists
         - (user_plan_map[item.name].groups_to_add | length) > 0
-
-    # --- アカウントの無効化（接続アカウント以外）---
-    - name: "アカウントを無効化（接続アカウント以外）"
-      ansible.windows.win_user:
-        name: "{{ item.name }}"
-        state: present
-        account_disabled: "{{ item.account_disabled }}"
-      loop: "{{ users }}"
-      loop_control:
-        label: "{{ item.name }} / {{ item.label | default('') }}"
-      when:
-        - user_plan_map[item.name].exists
-        - user_plan_map[item.name].need_disable
-        - not user_plan_map[item.name].is_connection_account
 
     # --- 変更直後の接続性確認 ---
     # ユーザー変更の影響で WinRM の認証が通らなくなるケースを実行中に検知する
@@ -424,17 +440,13 @@
       ansible.builtin.debug:
         var: users_after
 
-    # 接続アカウント自身の無効化は PHASE 4 に回している（または実行しない）ため、
-    # ここでは「アカウントを無効にする」の一致確認から除外する。
     - name: "[AFTER] 指定値どおりに設定されたことを確認"
       ansible.builtin.assert:
         that:
           - (users_after_map[item.name].MustChangePassword | bool) == item.must_change_password
           - (users_after_map[item.name].CannotChangePassword | bool) == item.cannot_change_password
           - (users_after_map[item.name].PasswordNeverExpires | bool) == item.password_never_expires
-          - >-
-            ((users_after_map[item.name].Disabled | bool) == item.account_disabled)
-            or (user_plan_map[item.name].is_connection_account)
+          - (users_after_map[item.name].Disabled | bool) == item.account_disabled
           - >-
             (item.groups | map('lower') | list
              | difference(users_after_map[item.name].Groups | map('lower') | list) | length) == 0
@@ -478,62 +490,3 @@
       loop_control:
         label: "{{ item.name }}"
       when: not (users_after_map[item.name].Exists | bool)
-
-    # =================================================================
-    # PHASE 4: 接続アカウント自身の無効化（最後に実行）
-    # =================================================================
-    # 実行した時点でこの資格情報では以後接続できなくなるため、
-    # 全ての設定と確認が終わったあとの最終タスクとして配置している。
-    - name: "[FINAL] 接続アカウントの無効化前に代替の管理者アカウントを検証"
-      ansible.builtin.assert:
-        that:
-          - >-
-            (users_after | selectattr('Exists') | rejectattr('Disabled')
-             | rejectattr('Name', 'eq', item.name)
-             | selectattr('Groups', 'contains', 'Administrators')
-             | list | length) > 0
-        success_msg: >-
-          有効な代替管理者アカウントを確認しました:
-          {{ users_after | selectattr('Exists') | rejectattr('Disabled')
-             | rejectattr('Name', 'eq', item.name)
-             | selectattr('Groups', 'contains', 'Administrators')
-             | map(attribute='Name') | list }}
-        fail_msg: >-
-          {{ item.name }} を無効化すると有効な管理者アカウントが無くなります。
-          代替の管理者アカウント（Administrators 所属かつ有効）を作成してから再実行してください。
-      loop: "{{ users }}"
-      loop_control:
-        label: "{{ item.name }}"
-      when:
-        - user_plan_map[item.name].is_connection_account
-        - user_plan_map[item.name].need_disable
-        - allow_disable_connection_account | default(false) | bool
-
-    - name: "[FINAL] 接続アカウント自身を無効化（allow_disable_connection_account が True の場合のみ）"
-      ansible.windows.win_user:
-        name: "{{ item.name }}"
-        state: present
-        account_disabled: true
-      loop: "{{ users }}"
-      loop_control:
-        label: "{{ item.name }} / {{ item.label | default('') }}"
-      when:
-        - user_plan_map[item.name].is_connection_account
-        - user_plan_map[item.name].need_disable
-        - allow_disable_connection_account | default(false) | bool
-
-    - name: "[FINAL] 接続アカウントの無効化をスキップしたことを報告"
-      ansible.builtin.debug:
-        msg: >-
-          {{ item.name }} は Ansible の接続アカウント自身のため、無効化をスキップしました。
-          無効化するとこの資格情報では接続できなくなります。
-          新しい管理者アカウントに接続情報を切り替えて再実行するか、
-          allow_disable_connection_account: True を指定して実行してください
-          （その場合は本 Playbook の最終タスクで無効化されます）。
-      loop: "{{ users }}"
-      loop_control:
-        label: "{{ item.name }}"
-      when:
-        - user_plan_map[item.name].is_connection_account
-        - user_plan_map[item.name].need_disable
-        - not (allow_disable_connection_account | default(false) | bool)
