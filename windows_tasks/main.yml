@@ -1,0 +1,13 @@
+---
+- name: Windows Server 2022 疎通確認
+  hosts: windows
+  gather_facts: false
+
+  # vars:
+  #   target_ip: "{{ hostvars[inventory_hostname].ansible_host }}"
+  #   target_port: "{{ hostvars[inventory_hostname].ansible_port | default(5985) }}"
+
+  tasks:
+    - name: debug
+      debug:
+        msg: "test message"

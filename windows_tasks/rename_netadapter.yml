@@ -1,0 +1,67 @@
+---
+- name: ネットワークアダプター名を ServerLAN に変更
+  hosts: windows
+  gather_facts: false
+
+  vars:
+    new_adapter_name: "ServerLAN"
+    target_ip: "{{ ansible_host }}"
+
+  tasks:
+    # 1. 変更前のアダプター情報を取得
+    - name: 変更前のネットワークアダプター情報を取得
+      ansible.windows.win_powershell:
+        script: |
+          Get-NetAdapter |
+            Select-Object Name, InterfaceDescription, Status, MacAddress, InterfaceIndex |
+            Sort-Object InterfaceIndex
+      register: adapters_before
+
+    - name: 変更前のアダプター情報を表示
+      ansible.builtin.debug:
+        var: adapters_before.output
+
+    # 2. 変更対象アダプターの現在名を特定（WinRM 接続に使っている IP が割り当てられたアダプター）
+    - name: 対象アダプターの現在名を特定
+      ansible.windows.win_powershell:
+        parameters:
+          TargetIp: "{{ target_ip }}"
+        script: |
+          param($TargetIp)
+          $ip = Get-NetIPAddress -IPAddress $TargetIp -ErrorAction Stop
+          $adapter = Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex
+          $adapter.Name
+      register: target_adapter
+
+    - name: 変更前の対象アダプター名を表示
+      ansible.builtin.debug:
+        msg: "変更前のアダプター名: {{ target_adapter.output[0] }}"
+
+    # 3. アダプター名を ServerLAN に変更（既に ServerLAN の場合はスキップ = 冪等）
+    - name: アダプター名を ServerLAN に変更
+      ansible.windows.win_powershell:
+        parameters:
+          CurrentName: "{{ target_adapter.output[0] }}"
+          NewName: "{{ new_adapter_name }}"
+        script: |
+          param($CurrentName, $NewName)
+          if ($CurrentName -eq $NewName) {
+              $Ansible.Changed = $false
+          } else {
+              Rename-NetAdapter -Name $CurrentName -NewName $NewName
+              $Ansible.Changed = $true
+          }
+      when: target_adapter.output[0] != new_adapter_name
+
+    # 4. 変更後のアダプター情報を再取得（確認）
+    - name: 変更後のネットワークアダプター情報を取得
+      ansible.windows.win_powershell:
+        script: |
+          Get-NetAdapter |
+            Select-Object Name, InterfaceDescription, Status, MacAddress, InterfaceIndex |
+            Sort-Object InterfaceIndex
+      register: adapters_after
+
+    - name: 変更後のアダプター情報を表示
+      ansible.builtin.debug:
+        var: adapters_after.output

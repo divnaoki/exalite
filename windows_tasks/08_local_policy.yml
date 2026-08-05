@@ -1,0 +1,276 @@
+---
+# =====================================================================
+# 08_ローカルグループポリシー設定
+#
+# 構成ルール:
+#   PHASE 1  変更前の設定情報を取得（必ず取得）
+#   PHASE 2  現在値と異なる場合のみ変更を実行（冪等）
+#   PHASE 3  変更後の設定情報を再取得して確認
+#
+# 設定値は vars/08_local_policy.yml で定義。
+# Exastro のパラメータシートからは extra-vars で「有効」「無効」の文字列を渡す
+# （サービス無効化や 06_windows_update の True/False とは形式が異なる）。
+# 想定外の値は PHASE 0 の [GUARD] で検知して中止する。
+#
+# 【実装方式について】
+# 管理用テンプレートのポリシーは HKLM\SOFTWARE\Policies\... に実体があるため
+# 専用モジュール win_regedit で直接設定する（本業環境に LGPO.exe や
+# PolicyFileEditor モジュールを持ち込まなくて済むため）。
+# 検証機（ドメイン非参加 / Registry.pol 無し）で gpupdate /force 後も
+# 値が維持されることを確認済み。
+#
+# 【既知の制約】
+#  - Registry.pol を書かないため gpedit.msc の表示上は「未構成」のままになる。
+#    実際の OS 動作はレジストリ値に従うため設定は効いている。
+#  - ドメイン参加環境で同じポリシーがドメイン GPO に定義されている場合、
+#    グループポリシー適用時にドメイン側の値で上書きされる。
+#
+# 【他 Playbook との重複】
+#  06_windows_update.yml の wu_auto_update_enabled も NoAutoUpdate を書く。
+#  本 Playbook の lp_configure_auto_update と値が矛盾しないよう揃えること。
+#    lp_configure_auto_update: "無効"  ==  wu_auto_update_enabled: false
+# =====================================================================
+- name: "08_ローカルグループポリシー設定"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/08_local_policy.yml
+
+  vars:
+    reg_wu_au: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+    reg_ts: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+
+    # Exastro のパラメータシートから渡る「有効」「無効」をポリシー状態に変換する。
+    # 想定外の値は INVALID になり、[GUARD] タスクで中止する。
+    policy_word_map:
+      "有効": "Enabled"
+      "有効にする": "Enabled"
+      "無効": "Disabled"
+      "無効にする": "Disabled"
+
+    desired_au_state: "{{ policy_word_map[lp_configure_auto_update | string | trim] | default('INVALID', true) }}"
+    desired_single_state: "{{ policy_word_map[lp_rds_single_session | string | trim] | default('INVALID', true) }}"
+    desired_idle_state: "{{ policy_word_map[lp_rds_idle_time_limit | string | trim] | default('INVALID', true) }}"
+    desired_max_idle_ms: "{{ (lp_rds_idle_time_limit_minutes | int) * 60000 }}"
+
+  tasks:
+    # =================================================================
+    # PHASE 0: パラメータ値の検証（変更を1件も行う前に実施）
+    # =================================================================
+    - name: "[GUARD] パラメータ値が「有効」「無効」であることを検証"
+      ansible.builtin.assert:
+        that:
+          - desired_au_state != 'INVALID'
+          - desired_single_state != 'INVALID'
+          - desired_idle_state != 'INVALID'
+          # 有効にする場合のみ、制限時間が正の数であること
+          - >-
+            desired_idle_state == 'Disabled'
+            or (lp_rds_idle_time_limit_minutes | int) > 0
+        success_msg: "パラメータ値は全て正常です。処理を継続します。"
+        fail_msg: >-
+          パラメータ値が不正です。「有効」または「無効」を指定してください。
+          自動更新を構成する='{{ lp_configure_auto_update }}'(解釈={{ desired_au_state }}) /
+          セッションを1つに制限する='{{ lp_rds_single_session }}'(解釈={{ desired_single_state }}) /
+          アイドル制限時間='{{ lp_rds_idle_time_limit }}'(解釈={{ desired_idle_state }}) /
+          アイドル制限(分)={{ lp_rds_idle_time_limit_minutes }}
+
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得
+    # =================================================================
+    - name: "[BEFORE] 対象ポリシーの現在設定を取得"
+      ansible.windows.win_shell: |
+        $wuAu = '{{ reg_wu_au }}'
+        $ts   = '{{ reg_ts }}'
+
+        function Get-RegInt($Path, $Name) {
+          $v = (Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue).$Name
+          if ($null -eq $v) { return $null }
+          return [int]$v
+        }
+
+        $noAutoUpdate   = Get-RegInt $wuAu 'NoAutoUpdate'
+        $auOptions      = Get-RegInt $wuAu 'AUOptions'
+        $singleSession  = Get-RegInt $ts   'fSingleSessionPerUser'
+        $maxIdleTime    = Get-RegInt $ts   'MaxIdleTime'
+
+        # ポリシーの状態（有効にする / 無効にする / 未構成）へ正規化して返す
+        $r = [ordered]@{
+          ConfigureAutoUpdateState = $(
+            if ($null -eq $noAutoUpdate)  { 'NotConfigured' }
+            elseif ($noAutoUpdate -eq 1)  { 'Disabled' }
+            else                          { 'Enabled' })
+          AuOptions = $(if ($null -eq $auOptions) { 0 } else { $auOptions })
+          AuOptionsPresent = ($null -ne $auOptions)
+
+          SingleSessionState = $(
+            if ($null -eq $singleSession) { 'NotConfigured' }
+            elseif ($singleSession -eq 1) { 'Enabled' }
+            else                          { 'Disabled' })
+
+          IdleTimeLimitState = $(
+            if ($null -eq $maxIdleTime)   { 'NotConfigured' }
+            elseif ($maxIdleTime -eq 0)   { 'Disabled' }
+            else                          { 'Enabled' })
+          IdleTimeLimitMinutes = $(if ($null -eq $maxIdleTime) { 0 } else { [int]($maxIdleTime / 60000) })
+
+          Raw_NoAutoUpdate          = $noAutoUpdate
+          Raw_AUOptions             = $auOptions
+          Raw_fSingleSessionPerUser = $singleSession
+          Raw_MaxIdleTime           = $maxIdleTime
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: lp_before_raw
+
+    - name: "[BEFORE] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        lp_before: "{{ lp_before_raw.stdout | from_json }}"
+
+    - name: "[BEFORE] 現在設定を表示"
+      ansible.builtin.debug:
+        var: lp_before
+
+    - name: "[BEFORE] 設定予定値（パラメータシート値）を表示"
+      ansible.builtin.debug:
+        msg:
+          - "自動更新を構成する                     : {{ lp_before.ConfigureAutoUpdateState }} -> {{ desired_au_state }} (指定値: {{ lp_configure_auto_update }})"
+          - "  └ 動作モード(AUOptions)              : {{ lp_before.AuOptions }} -> {{ (lp_au_options | int) if desired_au_state == 'Enabled' else '削除' }}"
+          - "RDSセッションを1つに制限する           : {{ lp_before.SingleSessionState }} -> {{ desired_single_state }} (指定値: {{ lp_rds_single_session }})"
+          - "アイドルセッションの制限時間を設定する : {{ lp_before.IdleTimeLimitState }} -> {{ desired_idle_state }} (指定値: {{ lp_rds_idle_time_limit }})"
+          - "  └ アイドルセッションの制限(分)       : {{ lp_before.IdleTimeLimitMinutes }} -> {{ (lp_rds_idle_time_limit_minutes | int) if desired_idle_state == 'Enabled' else 0 }}"
+
+    # =================================================================
+    # PHASE 2: 変更（現在値と異なる場合のみ実行）
+    # =================================================================
+
+    # --- WindowsUpdate > 自動更新を構成する ---
+    - name: "「自動更新を構成する」ポリシーを設定 (NoAutoUpdate)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_wu_au }}"
+        name: NoAutoUpdate
+        data: "{{ 0 if desired_au_state == 'Enabled' else 1 }}"
+        type: dword
+        state: present
+      when: lp_before.ConfigureAutoUpdateState != desired_au_state
+
+    # 「無効」の場合、gpedit と同様に AUOptions を削除する
+    - name: "「自動更新を構成する」が無効のため AUOptions を削除"
+      ansible.windows.win_regedit:
+        path: "{{ reg_wu_au }}"
+        name: AUOptions
+        state: absent
+      when:
+        - desired_au_state == 'Disabled'
+        - lp_before.AuOptionsPresent | bool
+
+    # 「有効にする」の場合のみ動作モードを設定
+    - name: "「自動更新を構成する」の動作モードを設定 (AUOptions)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_wu_au }}"
+        name: AUOptions
+        data: "{{ lp_au_options | int }}"
+        type: dword
+        state: present
+      when:
+        - desired_au_state == 'Enabled'
+        - (lp_before.AuOptions | int) != (lp_au_options | int)
+
+    # --- RDS > 接続 > セッションを1つに制限する ---
+    - name: "「RDSセッションを1つに制限する」ポリシーを設定 (fSingleSessionPerUser)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_ts }}"
+        name: fSingleSessionPerUser
+        data: "{{ 1 if desired_single_state == 'Enabled' else 0 }}"
+        type: dword
+        state: present
+      when: lp_before.SingleSessionState != desired_single_state
+
+    # --- RDS > セッションの時間制限 > アイドル制限時間 ---
+    # 有効にする → 制限時間(ミリ秒) / 無効にする → 0
+    - name: "「アイドルセッションの制限時間を設定する」ポリシーを設定 (MaxIdleTime)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_ts }}"
+        name: MaxIdleTime
+        data: "{{ desired_max_idle_ms | int if desired_idle_state == 'Enabled' else 0 }}"
+        type: dword
+        state: present
+      when: >-
+        lp_before.IdleTimeLimitState != desired_idle_state
+        or (desired_idle_state == 'Enabled'
+            and (lp_before.IdleTimeLimitMinutes | int) != (lp_rds_idle_time_limit_minutes | int))
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を再取得（確認）
+    # =================================================================
+    - name: "[AFTER] 対象ポリシーの設定を再取得"
+      ansible.windows.win_shell: |
+        $wuAu = '{{ reg_wu_au }}'
+        $ts   = '{{ reg_ts }}'
+
+        function Get-RegInt($Path, $Name) {
+          $v = (Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue).$Name
+          if ($null -eq $v) { return $null }
+          return [int]$v
+        }
+
+        $noAutoUpdate   = Get-RegInt $wuAu 'NoAutoUpdate'
+        $auOptions      = Get-RegInt $wuAu 'AUOptions'
+        $singleSession  = Get-RegInt $ts   'fSingleSessionPerUser'
+        $maxIdleTime    = Get-RegInt $ts   'MaxIdleTime'
+
+        $r = [ordered]@{
+          ConfigureAutoUpdateState = $(
+            if ($null -eq $noAutoUpdate)  { 'NotConfigured' }
+            elseif ($noAutoUpdate -eq 1)  { 'Disabled' }
+            else                          { 'Enabled' })
+          AuOptions = $(if ($null -eq $auOptions) { 0 } else { $auOptions })
+          AuOptionsPresent = ($null -ne $auOptions)
+
+          SingleSessionState = $(
+            if ($null -eq $singleSession) { 'NotConfigured' }
+            elseif ($singleSession -eq 1) { 'Enabled' }
+            else                          { 'Disabled' })
+
+          IdleTimeLimitState = $(
+            if ($null -eq $maxIdleTime)   { 'NotConfigured' }
+            elseif ($maxIdleTime -eq 0)   { 'Disabled' }
+            else                          { 'Enabled' })
+          IdleTimeLimitMinutes = $(if ($null -eq $maxIdleTime) { 0 } else { [int]($maxIdleTime / 60000) })
+
+          Raw_NoAutoUpdate          = $noAutoUpdate
+          Raw_AUOptions             = $auOptions
+          Raw_fSingleSessionPerUser = $singleSession
+          Raw_MaxIdleTime           = $maxIdleTime
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: lp_after_raw
+
+    - name: "[AFTER] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        lp_after: "{{ lp_after_raw.stdout | from_json }}"
+
+    - name: "[AFTER] 変更後の設定を表示"
+      ansible.builtin.debug:
+        var: lp_after
+
+    - name: "[AFTER] 設定値が反映されたことを確認"
+      ansible.builtin.assert:
+        that:
+          - lp_after.ConfigureAutoUpdateState == desired_au_state
+          - lp_after.SingleSessionState == desired_single_state
+          - lp_after.IdleTimeLimitState == desired_idle_state
+          - >-
+            desired_idle_state == 'Disabled'
+            or ((lp_after.IdleTimeLimitMinutes | int) == (lp_rds_idle_time_limit_minutes | int))
+          - >-
+            desired_au_state == 'Enabled'
+            or (not (lp_after.AuOptionsPresent | bool))
+        success_msg: "全てのローカルグループポリシー設定がパラメータシートの値と一致しました。"
+        fail_msg: "設定値が一致しない項目があります。[AFTER] の出力を確認してください。"

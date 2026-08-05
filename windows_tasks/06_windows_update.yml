@@ -1,0 +1,242 @@
+---
+# =====================================================================
+# 06_WindowsUpdate 設定
+#
+# 構成ルール:
+#   PHASE 1  変更前の設定情報を取得（必ず取得）
+#   PHASE 2  現在値と異なる場合のみ変更を実行（冪等）
+#   PHASE 3  変更後の設定情報を再取得して確認
+#
+# 設定値は vars/06_windows_update.yml で定義。
+# Exastro のパラメータシートからは extra-vars で True/False を渡す。
+# Exastro は値を文字列で渡すため、判定は全て `| bool` を通している。
+#
+# シェル実行は win_powershell ではなく win_shell を使用（本業環境に合わせる）。
+# 専用モジュールがあるものは win_shell を使わず、
+# レジストリ= win_regedit / サービス= win_service を使用（前後取得と when は同様に実施）。
+# =====================================================================
+- name: "06_WindowsUpdate 設定"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/06_windows_update.yml
+
+  vars:
+    reg_au: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+    reg_wu: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+    reg_do: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'
+    msupdate_service_id: '7971f918-a847-4430-9279-4a52d1efe18d'
+
+  tasks:
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得
+    # =================================================================
+    - name: "[BEFORE] WindowsUpdate の現在設定を取得"
+      ansible.windows.win_shell: |
+        $auPath = '{{ reg_au }}'
+        $wuPath = '{{ reg_wu }}'
+        $doPath = '{{ reg_do }}'
+
+        function Get-RegInt($Path, $Name) {
+          $v = (Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue).$Name
+          if ($null -eq $v) { return $null }
+          return [int]$v
+        }
+
+        $noAutoUpdate   = Get-RegInt $auPath 'NoAutoUpdate'
+        $auOptions      = Get-RegInt $auPath 'AUOptions'
+        $noAutoReboot   = Get-RegInt $auPath 'NoAutoRebootWithLoggedOnUsers'
+        $excludeDrivers = Get-RegInt $wuPath 'ExcludeWUDriversInQualityUpdate'
+        $doMode         = Get-RegInt $doPath 'DODownloadMode'
+
+        $svc = Get-Service -Name wuauserv
+        $sm  = New-Object -ComObject Microsoft.Update.ServiceManager
+        $msUpdate = [bool]($sm.Services | Where-Object { $_.ServiceID -eq '{{ msupdate_service_id }}' })
+
+        # パラメータシートの True/False と 1:1 で比較できる形に正規化して返す
+        $r = [ordered]@{
+          AutoUpdateEnabled           = ($noAutoUpdate -ne 1)
+          AuOptions                   = $(if ($null -eq $auOptions) { 0 } else { $auOptions })
+          AutoRebootEnabled           = ($noAutoReboot -ne 1)
+          MicrosoftUpdateEnabled      = $msUpdate
+          IncludeDrivers              = ($excludeDrivers -ne 1)
+          DeliveryOptimizationEnabled = (($null -ne $doMode) -and ($doMode -ne 0))
+          ServiceEnabled              = ($svc.StartType.ToString() -ne 'Disabled')
+          ServiceStartType            = $svc.StartType.ToString()
+          ServiceStatus               = $svc.Status.ToString()
+          Raw_NoAutoUpdate            = $noAutoUpdate
+          Raw_NoAutoReboot            = $noAutoReboot
+          Raw_ExcludeDrivers          = $excludeDrivers
+          Raw_DODownloadMode          = $doMode
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: wu_before_raw
+
+    - name: "[BEFORE] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        wu_before: "{{ wu_before_raw.stdout | from_json }}"
+
+    - name: "[BEFORE] 現在設定を表示"
+      ansible.builtin.debug:
+        var: wu_before
+
+    - name: "[BEFORE] 設定予定値（パラメータシート値）を表示"
+      ansible.builtin.debug:
+        msg:
+          - "自動更新                     : {{ wu_before.AutoUpdateEnabled }} -> {{ wu_auto_update_enabled | bool }}"
+          - "自動更新の動作モード         : {{ wu_before.AuOptions }} -> {{ wu_au_options | int }}{{ ' (自動更新が無効のため適用しない)' if not (wu_auto_update_enabled | bool) else '' }}"
+          - "自動再起動                   : {{ wu_before.AutoRebootEnabled }} -> {{ wu_auto_reboot_enabled | bool }}"
+          - "他のMicrosoft製品の更新      : {{ wu_before.MicrosoftUpdateEnabled }} -> {{ wu_microsoft_update_enabled | bool }}"
+          - "ドライバーを含める           : {{ wu_before.IncludeDrivers }} -> {{ wu_include_drivers | bool }}"
+          - "配信の最適化                 : {{ wu_before.DeliveryOptimizationEnabled }} -> {{ wu_delivery_optimization_enabled | bool }}"
+          - "WindowsUpdateサービス        : {{ wu_before.ServiceEnabled }} ({{ wu_before.ServiceStartType }}) -> {{ wu_service_enabled | bool }}"
+
+    # =================================================================
+    # PHASE 2: 変更（現在値と異なる場合のみ実行）
+    # =================================================================
+
+    # --- 自動更新の有効/無効 ---
+    - name: "自動更新の有効/無効 を設定 (NoAutoUpdate)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_au }}"
+        name: NoAutoUpdate
+        data: "{{ 0 if (wu_auto_update_enabled | bool) else 1 }}"
+        type: dword
+        state: present
+      when: (wu_before.AutoUpdateEnabled | bool) != (wu_auto_update_enabled | bool)
+
+    # --- 自動更新の動作モード（自動更新が有効なときのみ）---
+    - name: "自動更新の動作モード を設定 (AUOptions)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_au }}"
+        name: AUOptions
+        data: "{{ wu_au_options | int }}"
+        type: dword
+        state: present
+      when:
+        - wu_auto_update_enabled | bool
+        - (wu_before.AuOptions | int) != (wu_au_options | int)
+
+    # --- 自動再起動の有効/無効 ---
+    - name: "自動再起動の有効/無効 を設定 (NoAutoRebootWithLoggedOnUsers)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_au }}"
+        name: NoAutoRebootWithLoggedOnUsers
+        data: "{{ 0 if (wu_auto_reboot_enabled | bool) else 1 }}"
+        type: dword
+        state: present
+      when: (wu_before.AutoRebootEnabled | bool) != (wu_auto_reboot_enabled | bool)
+
+    # --- 品質更新プログラムへのドライバー含有 ---
+    - name: "ドライバーを含める/除外する を設定 (ExcludeWUDriversInQualityUpdate)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_wu }}"
+        name: ExcludeWUDriversInQualityUpdate
+        data: "{{ 0 if (wu_include_drivers | bool) else 1 }}"
+        type: dword
+        state: present
+      when: (wu_before.IncludeDrivers | bool) != (wu_include_drivers | bool)
+
+    # --- 配信の最適化 ---
+    - name: "配信の最適化 有効/無効 を設定 (DODownloadMode)"
+      ansible.windows.win_regedit:
+        path: "{{ reg_do }}"
+        name: DODownloadMode
+        data: "{{ 1 if (wu_delivery_optimization_enabled | bool) else 0 }}"
+        type: dword
+        state: present
+      when: (wu_before.DeliveryOptimizationEnabled | bool) != (wu_delivery_optimization_enabled | bool)
+
+    # --- 他の Microsoft 製品の更新プログラム（専用モジュールが無いため win_shell）---
+    - name: "他のMicrosoft製品の更新プログラム を設定 (Microsoft Update)"
+      ansible.windows.win_shell: |
+        $sm = New-Object -ComObject Microsoft.Update.ServiceManager
+        $id = '{{ msupdate_service_id }}'
+        {% if wu_microsoft_update_enabled | bool %}
+        # 第2引数 7 = AddServiceFlag (RegisterServiceWithAU | AllowPendingRegistration | AllowOnlineRegistration)
+        $sm.AddService2($id, 7, "") | Out-Null
+        {% else %}
+        $sm.RemoveService($id)
+        {% endif %}
+      args:
+        executable: powershell
+      when: (wu_before.MicrosoftUpdateEnabled | bool) != (wu_microsoft_update_enabled | bool)
+      changed_when: true
+
+    # --- Windows Update サービス（wuauserv）---
+    - name: "WindowsUpdateサービス(wuauserv) を設定"
+      ansible.windows.win_service:
+        name: wuauserv
+        start_mode: "{{ 'manual' if (wu_service_enabled | bool) else 'disabled' }}"
+        state: "{{ 'started' if (wu_service_enabled | bool) else 'stopped' }}"
+      when: (wu_before.ServiceEnabled | bool) != (wu_service_enabled | bool)
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を再取得（確認）
+    # =================================================================
+    - name: "[AFTER] WindowsUpdate の設定を再取得"
+      ansible.windows.win_shell: |
+        $auPath = '{{ reg_au }}'
+        $wuPath = '{{ reg_wu }}'
+        $doPath = '{{ reg_do }}'
+
+        function Get-RegInt($Path, $Name) {
+          $v = (Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue).$Name
+          if ($null -eq $v) { return $null }
+          return [int]$v
+        }
+
+        $noAutoUpdate   = Get-RegInt $auPath 'NoAutoUpdate'
+        $auOptions      = Get-RegInt $auPath 'AUOptions'
+        $noAutoReboot   = Get-RegInt $auPath 'NoAutoRebootWithLoggedOnUsers'
+        $excludeDrivers = Get-RegInt $wuPath 'ExcludeWUDriversInQualityUpdate'
+        $doMode         = Get-RegInt $doPath 'DODownloadMode'
+
+        $svc = Get-Service -Name wuauserv
+        $sm  = New-Object -ComObject Microsoft.Update.ServiceManager
+        $msUpdate = [bool]($sm.Services | Where-Object { $_.ServiceID -eq '{{ msupdate_service_id }}' })
+
+        $r = [ordered]@{
+          AutoUpdateEnabled           = ($noAutoUpdate -ne 1)
+          AuOptions                   = $(if ($null -eq $auOptions) { 0 } else { $auOptions })
+          AutoRebootEnabled           = ($noAutoReboot -ne 1)
+          MicrosoftUpdateEnabled      = $msUpdate
+          IncludeDrivers              = ($excludeDrivers -ne 1)
+          DeliveryOptimizationEnabled = (($null -ne $doMode) -and ($doMode -ne 0))
+          ServiceEnabled              = ($svc.StartType.ToString() -ne 'Disabled')
+          ServiceStartType            = $svc.StartType.ToString()
+          ServiceStatus               = $svc.Status.ToString()
+          Raw_NoAutoUpdate            = $noAutoUpdate
+          Raw_NoAutoReboot            = $noAutoReboot
+          Raw_ExcludeDrivers          = $excludeDrivers
+          Raw_DODownloadMode          = $doMode
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: wu_after_raw
+
+    - name: "[AFTER] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        wu_after: "{{ wu_after_raw.stdout | from_json }}"
+
+    - name: "[AFTER] 変更後の設定を表示"
+      ansible.builtin.debug:
+        var: wu_after
+
+    - name: "[AFTER] 設定値が反映されたことを確認"
+      ansible.builtin.assert:
+        that:
+          - (wu_after.AutoUpdateEnabled | bool) == (wu_auto_update_enabled | bool)
+          - (wu_after.AutoRebootEnabled | bool) == (wu_auto_reboot_enabled | bool)
+          - (wu_after.MicrosoftUpdateEnabled | bool) == (wu_microsoft_update_enabled | bool)
+          - (wu_after.IncludeDrivers | bool) == (wu_include_drivers | bool)
+          - (wu_after.DeliveryOptimizationEnabled | bool) == (wu_delivery_optimization_enabled | bool)
+          - (wu_after.ServiceEnabled | bool) == (wu_service_enabled | bool)
+        success_msg: "全ての WindowsUpdate 設定がパラメータシートの値と一致しました。"
+        fail_msg: "設定値が一致しない項目があります。[AFTER] の出力を確認してください。"
