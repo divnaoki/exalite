@@ -10,7 +10,7 @@
 # 対象:
 #   ・ドメイン / プライベート / パブリック 各プロファイルの
 #     状態・受信接続・送信接続（プロファイルごとに変数を分けている）
-#   ・受信の規則「ファイルとプリンターの共有」のプロファイルと有効化
+#   ・vars で指定した受信の規則のプロファイルと有効化（規則名で個別指定）
 #
 # 設定値は vars/15_firewall.yml で定義。
 # Exastro からは「有効（推奨）」「ブロック（既定）」のような日本語ラベルが渡るため、
@@ -121,8 +121,9 @@
           }
         })
 
-        # グループ配下の受信規則（存在しない場合は空になる）
-        $rules = @(Get-NetFirewallRule -Group '{{ fw_rule_group }}' -Direction Inbound -EA SilentlyContinue |
+        # 対象の受信規則（指定した規則名のみ。存在しないものは取得されない）
+        $ruleNames = '{{ fw_rules | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $rules = @(Get-NetFirewallRule -Name $ruleNames -EA SilentlyContinue |
           ForEach-Object {
             [ordered]@{
               Name    = $_.Name
@@ -132,8 +133,11 @@
               Profile = $_.Profile.ToString()
             }
           })
+        # 存在しなかった規則（エラーにせずスキップし、最後に報告する）
+        $missing = @($ruleNames | Where-Object { $rules.Name -notcontains $_ })
 
-        [ordered]@{ Profiles = $profiles; Rules = $rules } | ConvertTo-Json -Compress -Depth 4
+        [ordered]@{ Profiles = $profiles; Rules = $rules; MissingRules = $missing } |
+          ConvertTo-Json -Compress -Depth 4
       args:
         executable: powershell
       changed_when: false
@@ -173,9 +177,11 @@
 
     - name: "[PLAN] 変更する受信の規則を表示"
       ansible.builtin.debug:
-        msg: "変更する受信の規則 : {{ fw_fix_rules }}（グループ内 {{ fw_before.Rules | length }} 件中）"
+        msg:
+          - "変更する受信の規則 : {{ fw_fix_rules }}"
+          - "対象として検出した規則 : {{ fw_before.Rules | map(attribute='Display') | list }}"
 
-    # 規則が1件も取得できない場合、グループ ID の誤りか OS 側に規則が無い。
+    # 指定した規則が1件も取得できない場合、規則名の誤りか OS 側に規則が無い。
     # 何も設定されないまま成功したように見えるのを防ぐため中止する。
     - name: "[GUARD] 対象の受信規則が存在するか検証"
       ansible.builtin.assert:
@@ -183,8 +189,8 @@
           - (fw_before.Rules | length) > 0
         success_msg: "対象の受信規則を {{ fw_before.Rules | length }} 件検出しました。"
         fail_msg: >-
-          グループ {{ fw_rule_group }} の受信規則が1件も見つかりません。
-          vars の fw_rule_group が正しいか確認してください。
+          指定した受信規則が1件も見つかりません（{{ fw_rules | map(attribute='name') | list }}）。
+          vars の fw_rules の規則名が正しいか確認してください。
 
     # =================================================================
     # PHASE 2: 変更（現在値と異なる場合のみ実行）
@@ -205,7 +211,7 @@
         or fw_before_map[item.name].Inbound != item.inbound
         or fw_before_map[item.name].Outbound != item.outbound
 
-    - name: "受信の規則（ファイルとプリンターの共有）を設定"
+    - name: "受信の規則を設定（プロファイル・有効）"
       ansible.windows.win_shell: |
         $names = '{{ fw_fix_rules | to_json }}' | ConvertFrom-Json
         Set-NetFirewallRule -Name $names `
@@ -238,7 +244,8 @@
           }
         })
 
-        $rules = @(Get-NetFirewallRule -Group '{{ fw_rule_group }}' -Direction Inbound -EA SilentlyContinue |
+        $ruleNames = '{{ fw_rules | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $rules = @(Get-NetFirewallRule -Name $ruleNames -EA SilentlyContinue |
           ForEach-Object {
             [ordered]@{
               Name    = $_.Name
@@ -247,8 +254,10 @@
               Profile = $_.Profile.ToString()
             }
           })
+        $missing = @($ruleNames | Where-Object { $rules.Name -notcontains $_ })
 
-        [ordered]@{ Profiles = $profiles; Rules = $rules } | ConvertTo-Json -Compress -Depth 4
+        [ordered]@{ Profiles = $profiles; Rules = $rules; MissingRules = $missing } |
+          ConvertTo-Json -Compress -Depth 4
       args:
         executable: powershell
       changed_when: false
@@ -300,3 +309,8 @@
           指定値と異なる規則があります:
           有効でない={{ fw_after.Rules | rejectattr('Enabled', 'equalto', fw_rule_enabled_val | bool) | map(attribute='Name') | list }},
           プロファイル不一致={{ fw_after.Rules | rejectattr('Profile', 'equalto', fw_rule_profile_val) | map(attribute='Name') | list }}
+
+    - name: "[AFTER] 存在しなかった受信の規則を報告"
+      ansible.builtin.debug:
+        msg: "対象サーバーに存在しないためスキップした規則: {{ fw_after.MissingRules }}"
+      when: (fw_after.MissingRules | length) > 0
