@@ -1,0 +1,21 @@
+# =====================================================================
+# 13_リモートデスクトップ : 変数定義
+#
+# パラメータシートの対応:
+#   コンピューターへの接続を許可しない          -> FALSE  ┐ 同じラジオボタンなので
+#   コンピューターへの接続を許可する            -> TRUE   ┘ rdp_allow_connections 1つで表す
+#   ネットワークレベル認証でリモートデスクトップを
+#   実行しているコンピューターからのみ接続を許可する(推奨) -> TRUE
+#
+# Exastro からは文字列で渡るため、Playbook 側で `| bool` を通して評価する。
+# =====================================================================
+
+# 「コンピューターへの接続を許可する」= True /「許可しない」= False
+# 実体: HKLM\System\CurrentControlSet\Control\Terminal Server
+#       fDenyTSConnections (True のとき 0、False のとき 1 ※値が反転)
+rdp_allow_connections: True
+
+# 「ネットワークレベル認証でのみ接続を許可する(推奨)」
+# 実体: ...\Terminal Server\WinStations\RDP-Tcp
+#       UserAuthentication (True のとき 1)
+rdp_require_nla: True
