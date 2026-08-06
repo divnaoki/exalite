@@ -9,7 +9,7 @@
 #
 # 対象:
 #   ・ドメイン / プライベート / パブリック 各プロファイルの
-#     状態・受信接続・送信接続
+#     状態・受信接続・送信接続（プロファイルごとに変数を分けている）
 #   ・受信の規則「ファイルとプリンターの共有」のプロファイルと有効化
 #
 # 設定値は vars/15_firewall.yml で定義。
@@ -30,53 +30,86 @@
     # =================================================================
     # 表記ゆれを吸収するため、空白・全角カッコ・「(既定)」「(推奨)」を除去し、
     # 英字は大文字化してから変換表（vars の *_map）と突き合わせる。
-    - name: "[PREP] パラメータシートの値を正規化"
+    - name: "[PREP] プロファイルごとの指定値を変換"
       ansible.builtin.set_fact:
-        fw_norm: >-
-          {{ dict(['enabled', 'inbound', 'outbound', 'rule_profile', 'rule_enabled']
-             | zip([fw_enabled, fw_inbound_action, fw_outbound_action,
-                    fw_rule_profile, fw_rule_enabled]
-                   | map('string') | map('trim')
-                   | map('replace', ' ', '') | map('replace', '　', '')
-                   | map('replace', '（', '(') | map('replace', '）', ')')
-                   | map('replace', '(既定)', '') | map('replace', '(推奨)', '')
-                   | map('upper') | list)) }}
+        fw_targets: >-
+          {{ fw_targets | default([]) + [ {
+               'name': item.name,
+               'label': item.label,
+               'enabled': (fw_state_map[n[0]] | default('')),
+               'inbound': (fw_action_map[n[1]] | default('')),
+               'outbound': (fw_action_map[n[2]] | default('')),
+               'raw': (item.enabled ~ ' / ' ~ item.inbound ~ ' / ' ~ item.outbound)
+             } ] }}
+      vars:
+        n: >-
+          {{ [item.enabled, item.inbound, item.outbound]
+             | map('string') | map('trim')
+             | map('replace', ' ', '') | map('replace', '　', '')
+             | map('replace', '（', '(') | map('replace', '）', ')')
+             | map('replace', '(既定)', '') | map('replace', '(推奨)', '')
+             | map('upper') | list }}
+      loop: "{{ fw_profile_settings }}"
+      loop_control:
+        label: "{{ item.label }}"
 
-    - name: "[PREP] 変換表で PowerShell の値に変換"
+    - name: "[PREP] 受信の規則の指定値を変換"
       ansible.builtin.set_fact:
-        fw_enabled_val: "{{ fw_state_map[fw_norm.enabled] | default('') }}"
-        fw_inbound_val: "{{ fw_action_map[fw_norm.inbound] | default('') }}"
-        fw_outbound_val: "{{ fw_action_map[fw_norm.outbound] | default('') }}"
-        fw_rule_profile_val: "{{ fw_profile_map[fw_norm.rule_profile] | default('') }}"
-        fw_rule_enabled_val: "{{ fw_state_map[fw_norm.rule_enabled] | default('') }}"
+        fw_rule_profile_val: "{{ fw_profile_map[r[0]] | default('') }}"
+        fw_rule_enabled_val: "{{ fw_state_map[r[1]] | default('') }}"
+      vars:
+        r: >-
+          {{ [fw_rule_profile, fw_rule_enabled]
+             | map('string') | map('trim')
+             | map('replace', ' ', '') | map('replace', '　', '')
+             | map('replace', '（', '(') | map('replace', '）', ')')
+             | map('replace', '(既定)', '') | map('replace', '(推奨)', '')
+             | map('upper') | list }}
 
-    - name: "[GUARD] 指定値を変換できたか検証"
+    - name: "[PREP] 変換結果を表示"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.label }} : 「{{ item.raw }}」 ->
+          状態={{ item.enabled }}, 受信={{ item.inbound }}, 送信={{ item.outbound }}
+      loop: "{{ fw_targets }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+    - name: "[GUARD] プロファイルの指定値を変換できたか検証"
       ansible.builtin.assert:
         that:
-          - fw_enabled_val != ''
-          - fw_inbound_val != ''
-          - fw_outbound_val != ''
+          - item.enabled != ''
+          - item.inbound != ''
+          - item.outbound != ''
+        success_msg: "{{ item.label }} : 変換できました。"
+        fail_msg: >-
+          {{ item.label }} : パラメータシートの値を変換できません（「{{ item.raw }}」）。
+          指定できる値: 状態={{ fw_state_map.keys() | list }},
+          受信・送信={{ fw_action_map.keys() | list }}
+      loop: "{{ fw_targets }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+    - name: "[GUARD] 受信の規則の指定値を変換できたか検証"
+      ansible.builtin.assert:
+        that:
           - fw_rule_profile_val != ''
           - fw_rule_enabled_val != ''
         success_msg: >-
-          変換しました: 状態={{ fw_enabled_val }}, 受信={{ fw_inbound_val }},
-          送信={{ fw_outbound_val }},
-          規則プロファイル={{ fw_rule_profile_val }}, 規則有効={{ fw_rule_enabled_val }}
+          受信の規則 : プロファイル={{ fw_rule_profile_val }},
+          有効={{ fw_rule_enabled_val }} に変換できました。
         fail_msg: >-
-          パラメータシートの値を変換できません
-          (状態=「{{ fw_enabled }}」, 受信=「{{ fw_inbound_action }}」,
-          送信=「{{ fw_outbound_action }}」,
-          規則プロファイル=「{{ fw_rule_profile }}」, 規則有効=「{{ fw_rule_enabled }}」)。
-          指定できる値: 状態/有効={{ fw_state_map.keys() | list }},
-          受信・送信={{ fw_action_map.keys() | list }},
-          プロファイル={{ fw_profile_map.keys() | list }}
+          受信の規則の値を変換できません
+          (プロファイル=「{{ fw_rule_profile }}」, 有効=「{{ fw_rule_enabled }}」)。
+          指定できる値: プロファイル={{ fw_profile_map.keys() | list }},
+          有効={{ fw_state_map.keys() | list }}
 
     # =================================================================
     # PHASE 1: 変更前の設定情報を取得
     # =================================================================
     - name: "[BEFORE] 現在設定を取得"
       ansible.windows.win_shell: |
-        $names = '{{ fw_profiles | to_json }}' | ConvertFrom-Json
+        $names = '{{ fw_targets | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
 
         $profiles = @(Get-NetFirewallProfile -Profile $names | ForEach-Object {
           [ordered]@{
@@ -110,31 +143,37 @@
       ansible.builtin.set_fact:
         fw_before: "{{ fw_before_raw.stdout | from_json }}"
 
+    - name: "[BEFORE] プロファイル名で引ける辞書を作成"
+      ansible.builtin.set_fact:
+        fw_before_map: >-
+          {{ dict(fw_before.Profiles | map(attribute='Name') | zip(fw_before.Profiles)) }}
+
     - name: "[BEFORE] 現在設定を表示"
       ansible.builtin.debug:
         var: fw_before
 
-    # --- 変更が必要な対象を洗い出す ---
-    - name: "[PLAN] 変更が必要なプロファイルと規則を確定"
+    - name: "[BEFORE] プロファイルごとの現在値と指定値を表示"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.label }} :
+          状態 {{ fw_before_map[item.name].Enabled }} -> {{ item.enabled | bool }},
+          受信 {{ fw_before_map[item.name].Inbound }} -> {{ item.inbound }},
+          送信 {{ fw_before_map[item.name].Outbound }} -> {{ item.outbound }}
+      loop: "{{ fw_targets }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+    - name: "[PLAN] 変更が必要な受信の規則を確定"
       ansible.builtin.set_fact:
-        fw_fix_profiles: >-
-          {{ (fw_before.Profiles | rejectattr('Enabled', 'equalto', fw_enabled_val | bool)
-              | map(attribute='Name') | list)
-             | union(fw_before.Profiles | rejectattr('Inbound', 'equalto', fw_inbound_val)
-                     | map(attribute='Name') | list)
-             | union(fw_before.Profiles | rejectattr('Outbound', 'equalto', fw_outbound_val)
-                     | map(attribute='Name') | list) }}
         fw_fix_rules: >-
           {{ (fw_before.Rules | rejectattr('Enabled', 'equalto', fw_rule_enabled_val | bool)
               | map(attribute='Name') | list)
              | union(fw_before.Rules | rejectattr('Profile', 'equalto', fw_rule_profile_val)
                      | map(attribute='Name') | list) }}
 
-    - name: "[PLAN] 処理内容を表示"
+    - name: "[PLAN] 変更する受信の規則を表示"
       ansible.builtin.debug:
-        msg:
-          - "変更するプロファイル : {{ fw_fix_profiles }}"
-          - "変更する受信の規則   : {{ fw_fix_rules }}（グループ内 {{ fw_before.Rules | length }} 件中）"
+        msg: "変更する受信の規則 : {{ fw_fix_rules }}（グループ内 {{ fw_before.Rules | length }} 件中）"
 
     # 規則が1件も取得できない場合、グループ ID の誤りか OS 側に規則が無い。
     # 何も設定されないまま成功したように見えるのを防ぐため中止する。
@@ -152,13 +191,19 @@
     # =================================================================
     - name: "ファイアウォールプロファイルを設定（状態・受信接続・送信接続）"
       ansible.windows.win_shell: |
-        Set-NetFirewallProfile -Profile {{ fw_fix_profiles | join(',') }} `
-          -Enabled {{ 'True' if (fw_enabled_val | bool) else 'False' }} `
-          -DefaultInboundAction {{ fw_inbound_val }} `
-          -DefaultOutboundAction {{ fw_outbound_val }}
+        Set-NetFirewallProfile -Profile {{ item.name }} `
+          -Enabled {{ 'True' if (item.enabled | bool) else 'False' }} `
+          -DefaultInboundAction {{ item.inbound }} `
+          -DefaultOutboundAction {{ item.outbound }}
       args:
         executable: powershell
-      when: (fw_fix_profiles | length) > 0
+      loop: "{{ fw_targets }}"
+      loop_control:
+        label: "{{ item.label }}"
+      when: >-
+        (fw_before_map[item.name].Enabled | bool) != (item.enabled | bool)
+        or fw_before_map[item.name].Inbound != item.inbound
+        or fw_before_map[item.name].Outbound != item.outbound
 
     - name: "受信の規則（ファイルとプリンターの共有）を設定"
       ansible.windows.win_shell: |
@@ -182,7 +227,7 @@
     # =================================================================
     - name: "[AFTER] 設定を再取得"
       ansible.windows.win_shell: |
-        $names = '{{ fw_profiles | to_json }}' | ConvertFrom-Json
+        $names = '{{ fw_targets | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
 
         $profiles = @(Get-NetFirewallProfile -Profile $names | ForEach-Object {
           [ordered]@{
@@ -213,6 +258,11 @@
       ansible.builtin.set_fact:
         fw_after: "{{ fw_after_raw.stdout | from_json }}"
 
+    - name: "[AFTER] プロファイル名で引ける辞書を作成"
+      ansible.builtin.set_fact:
+        fw_after_map: >-
+          {{ dict(fw_after.Profiles | map(attribute='Name') | zip(fw_after.Profiles)) }}
+
     - name: "[AFTER] 変更後の設定を表示"
       ansible.builtin.debug:
         var: fw_after
@@ -220,20 +270,23 @@
     - name: "[AFTER] プロファイルが指定値どおりであることを確認"
       ansible.builtin.assert:
         that:
-          - (item.Enabled | bool) == (fw_enabled_val | bool)
-          - item.Inbound == fw_inbound_val
-          - item.Outbound == fw_outbound_val
+          - (fw_after_map[item.name].Enabled | bool) == (item.enabled | bool)
+          - fw_after_map[item.name].Inbound == item.inbound
+          - fw_after_map[item.name].Outbound == item.outbound
         success_msg: >-
-          {{ item.Name }} : 状態={{ item.Enabled }}, 受信={{ item.Inbound }},
-          送信={{ item.Outbound }} で一致しました。
+          {{ item.label }} : 状態={{ fw_after_map[item.name].Enabled }},
+          受信={{ fw_after_map[item.name].Inbound }},
+          送信={{ fw_after_map[item.name].Outbound }} で一致しました。
         fail_msg: >-
-          {{ item.Name }} : 一致しません
-          (実際: 状態={{ item.Enabled }}, 受信={{ item.Inbound }}, 送信={{ item.Outbound }}
-          / 期待: 状態={{ fw_enabled_val | bool }}, 受信={{ fw_inbound_val }},
-          送信={{ fw_outbound_val }})。
-      loop: "{{ fw_after.Profiles }}"
+          {{ item.label }} : 一致しません
+          (実際: 状態={{ fw_after_map[item.name].Enabled }},
+          受信={{ fw_after_map[item.name].Inbound }},
+          送信={{ fw_after_map[item.name].Outbound }}
+          / 期待: 状態={{ item.enabled | bool }}, 受信={{ item.inbound }},
+          送信={{ item.outbound }})。
+      loop: "{{ fw_targets }}"
       loop_control:
-        label: "{{ item.Name }}"
+        label: "{{ item.label }}"
 
     - name: "[AFTER] 受信の規則が指定値どおりであることを確認"
       ansible.builtin.assert:
