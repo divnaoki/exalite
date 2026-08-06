@@ -19,3 +19,11 @@ rdp_allow_connections: True
 # 実体: ...\Terminal Server\WinStations\RDP-Tcp
 #       UserAuthentication (True のとき 1)
 rdp_require_nla: True
+
+# 開放する既存のファイアウォール規則（規則名 = Get-NetFirewallRule の Name）。
+# 表示名（DisplayName）は「リモート デスクトップ - ユーザー モード (TCP-受信)」
+# のように OS の言語で変わるが、規則名は変わらないためこちらを使う。
+# 新しい規則は作らず、この既存規則を有効化/無効化するだけ。
+rdp_firewall_rules:
+  - "RemoteDesktop-UserMode-In-TCP"   # TCP 3389（RDP 本体）
+  - "RemoteDesktop-UserMode-In-UDP"   # UDP 3389（画面転送の高速化に使用）
