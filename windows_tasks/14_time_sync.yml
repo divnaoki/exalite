@@ -19,7 +19,11 @@
   vars:
     reg_w32_param: 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters'
     reg_w32_client: 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpClient'
+    # コントロールパネル「インターネット時刻設定」のサーバー欄が参照する一覧
+    reg_dt_servers: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DateTime\Servers'
     ntp_enabled: "{{ ntp_sync_enabled | default(true) | bool }}"
+    # GUI 表示用のアドレス（先頭サーバーからフラグ ",0x9" を除いたもの）
+    ntp_display_server: "{{ ntp_servers.split(' ')[0].split(',')[0] }}"
 
   tasks:
     # =================================================================
@@ -27,6 +31,10 @@
     # =================================================================
     - name: "[BEFORE] 現在設定を取得"
       ansible.windows.win_shell: |
+        # GUI のサーバー欄は NtpServer ではなく DateTime\Servers の
+        # 既定インデックスが指すエントリを表示する
+        $d = (Get-ItemProperty '{{ reg_dt_servers }}' -EA SilentlyContinue).'(default)'
+        $gui = if ($d) { (Get-ItemProperty '{{ reg_dt_servers }}' -Name $d -EA SilentlyContinue).$d } else { $null }
         $r = [ordered]@{
           # NTP = インターネット時刻サーバーと同期する / NoSync = 同期しない
           Type             = (Get-ItemProperty '{{ reg_w32_param }}' -Name Type -EA SilentlyContinue).Type
@@ -35,6 +43,8 @@
           ServiceStatus    = (Get-Service w32time).Status.ToString()
           # 実際に同期している同期元（例: 172.16.1.1 / Local CMOS Clock）
           Source           = (w32tm /query /source)
+          # コントロールパネルのサーバー欄に表示される値
+          GuiServer        = $gui
         }
         $r | ConvertTo-Json -Compress
       args:
@@ -51,6 +61,7 @@
         msg:
           - "同期する    : {{ ntp_before.Type == 'NTP' }} -> {{ ntp_enabled | bool }}"
           - "サーバー    : {{ ntp_before.NtpServer | default('未設定', true) }} -> {{ ntp_servers if (ntp_enabled | bool) else '(同期しない)' }}"
+          - "GUI表示     : {{ ntp_before.GuiServer | default('未設定', true) }} -> {{ ntp_display_server if (ntp_enabled | bool) else '(変更しない)' }}"
           - "同期元/状態 : {{ ntp_before.Source }} / w32time={{ ntp_before.ServiceStatus }}"
 
     # =================================================================
@@ -73,12 +84,39 @@
         or ((ntp_enabled | bool) and not (ntp_before.NtpClientEnabled | bool))
       register: ntp_config
 
+    # コントロールパネルのサーバー欄は NtpServer ではなく DateTime\Servers を見るため、
+    # w32tm /config だけでは表示が古いまま（例: time.windows.com）になる。
+    # 指定アドレスを一覧に登録し、既定として選択された状態にする。
+    - name: "GUI（インターネット時刻設定）のサーバー欄を更新"
+      ansible.windows.win_shell: |
+        $key  = '{{ reg_dt_servers }}'
+        $addr = '{{ ntp_display_server }}'
+        $props = Get-ItemProperty $key
+        # 既に一覧にあればそのインデックスを使う（重複登録しない）
+        $idx = ($props.PSObject.Properties | Where-Object { $_.Name -match '^\d+$' -and $_.Value -eq $addr } |
+                Select-Object -First 1).Name
+        if (-not $idx) {
+          $used = @($props.PSObject.Properties | Where-Object { $_.Name -match '^\d+$' } | ForEach-Object { [int]$_.Name })
+          $idx  = [string]((($used | Measure-Object -Maximum).Maximum) + 1)
+          New-ItemProperty -Path $key -Name $idx -Value $addr -PropertyType String -Force | Out-Null
+        }
+        Set-ItemProperty -Path $key -Name '(default)' -Value $idx
+      args:
+        executable: powershell
+      when:
+        - ntp_enabled | bool
+        - ntp_before.GuiServer != ntp_display_server
+
     # 同期先に到達できない場合など、resync 自体は失敗しうる。
     # 設定は完了しているため Playbook は失敗させず、結果だけ表示する。
     - name: "時刻を強制同期 (w32tm /resync)"
-      ansible.windows.win_shell: w32tm /resync /force
+      ansible.windows.win_shell: |
+        chcp 65001 | Out-Null
+        w32tm /resync /force
       args:
         executable: powershell
+        # w32tm は日本語で出力するため、UTF-8 に揃えないとログが文字化けする
+        output_encoding_override: utf-8
       when:
         - ntp_config is changed
         - ntp_enabled | bool
@@ -96,12 +134,17 @@
     # =================================================================
     - name: "[AFTER] 設定を再取得"
       ansible.windows.win_shell: |
+        # GUI のサーバー欄は NtpServer ではなく DateTime\Servers の
+        # 既定インデックスが指すエントリを表示する
+        $d = (Get-ItemProperty '{{ reg_dt_servers }}' -EA SilentlyContinue).'(default)'
+        $gui = if ($d) { (Get-ItemProperty '{{ reg_dt_servers }}' -Name $d -EA SilentlyContinue).$d } else { $null }
         $r = [ordered]@{
           Type             = (Get-ItemProperty '{{ reg_w32_param }}' -Name Type -EA SilentlyContinue).Type
           NtpServer        = (Get-ItemProperty '{{ reg_w32_param }}' -Name NtpServer -EA SilentlyContinue).NtpServer
           NtpClientEnabled = ((Get-ItemProperty '{{ reg_w32_client }}' -Name Enabled -EA SilentlyContinue).Enabled -eq 1)
           ServiceStatus    = (Get-Service w32time).Status.ToString()
           Source           = (w32tm /query /source)
+          GuiServer        = $gui
         }
         $r | ConvertTo-Json -Compress
       args:
@@ -123,5 +166,7 @@
           - ntp_after.Type == ('NTP' if (ntp_enabled | bool) else 'NoSync')
           - (not (ntp_enabled | bool)) or (ntp_after.NtpServer == ntp_servers)
           - (not (ntp_enabled | bool)) or (ntp_after.NtpClientEnabled | bool)
+          # GUI のサーバー欄（コントロールパネルの表示）も指定値になっていること
+          - (not (ntp_enabled | bool)) or (ntp_after.GuiServer == ntp_display_server)
         success_msg: "時刻同期の設定がパラメータシートの値と一致しました ({{ ntp_after }})。"
         fail_msg: "設定値が一致しません (実際={{ ntp_after }} / 期待: 同期={{ ntp_enabled | bool }}, サーバー={{ ntp_servers }})。"
