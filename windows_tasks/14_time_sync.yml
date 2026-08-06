@@ -1,0 +1,127 @@
+---
+# =====================================================================
+# 14_時刻同期（インターネット時刻）
+#
+#   PHASE 1  変更前の設定情報を取得
+#   PHASE 2  現在値と異なる場合のみ変更を実行（冪等）
+#   PHASE 3  変更後の設定情報を取得して確認
+#
+# 設定値は vars/14_time_sync.yml で定義。値は文字列で渡るため `| bool` で評価する。
+# 設定は w32tm /config で行う（Type と NtpServer をまとめて設定できるため）。
+# =====================================================================
+- name: "14_時刻同期（インターネット時刻）"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/14_time_sync.yml
+
+  vars:
+    reg_w32_param: 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters'
+    reg_w32_client: 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders\NtpClient'
+    ntp_enabled: "{{ ntp_sync_enabled | default(true) | bool }}"
+
+  tasks:
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得
+    # =================================================================
+    - name: "[BEFORE] 現在設定を取得"
+      ansible.windows.win_shell: |
+        $r = [ordered]@{
+          # NTP = インターネット時刻サーバーと同期する / NoSync = 同期しない
+          Type             = (Get-ItemProperty '{{ reg_w32_param }}' -Name Type -EA SilentlyContinue).Type
+          NtpServer        = (Get-ItemProperty '{{ reg_w32_param }}' -Name NtpServer -EA SilentlyContinue).NtpServer
+          NtpClientEnabled = ((Get-ItemProperty '{{ reg_w32_client }}' -Name Enabled -EA SilentlyContinue).Enabled -eq 1)
+          ServiceStatus    = (Get-Service w32time).Status.ToString()
+          # 実際に同期している同期元（例: 172.16.1.1 / Local CMOS Clock）
+          Source           = (w32tm /query /source)
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: ntp_before_raw
+
+    - name: "[BEFORE] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        ntp_before: "{{ ntp_before_raw.stdout | from_json }}"
+
+    - name: "[BEFORE] 現在設定と指定値を表示"
+      ansible.builtin.debug:
+        msg:
+          - "同期する    : {{ ntp_before.Type == 'NTP' }} -> {{ ntp_enabled | bool }}"
+          - "サーバー    : {{ ntp_before.NtpServer | default('未設定', true) }} -> {{ ntp_servers if (ntp_enabled | bool) else '(同期しない)' }}"
+          - "同期元/状態 : {{ ntp_before.Source }} / w32time={{ ntp_before.ServiceStatus }}"
+
+    # =================================================================
+    # PHASE 2: 変更（現在値と異なる場合のみ実行）
+    # =================================================================
+    # 「同期する」場合は Type=NTP とサーバーの両方が一致していれば実行しない。
+    - name: "時刻同期を設定 (w32tm /config)"
+      ansible.windows.win_shell: |
+        {% if ntp_enabled | bool %}
+        w32tm /config /syncfromflags:manual /manualpeerlist:"{{ ntp_servers }}" /update
+        {% else %}
+        w32tm /config /syncfromflags:NO /update
+        {% endif %}
+        Restart-Service w32time
+      args:
+        executable: powershell
+      when: >-
+        (ntp_enabled | bool) != (ntp_before.Type == 'NTP')
+        or ((ntp_enabled | bool) and (ntp_before.NtpServer != ntp_servers))
+        or ((ntp_enabled | bool) and not (ntp_before.NtpClientEnabled | bool))
+      register: ntp_config
+
+    # 同期先に到達できない場合など、resync 自体は失敗しうる。
+    # 設定は完了しているため Playbook は失敗させず、結果だけ表示する。
+    - name: "時刻を強制同期 (w32tm /resync)"
+      ansible.windows.win_shell: w32tm /resync /force
+      args:
+        executable: powershell
+      when:
+        - ntp_config is changed
+        - ntp_enabled | bool
+      failed_when: false
+      changed_when: true
+      register: ntp_resync
+
+    - name: "[CHECK] 強制同期の結果を表示"
+      ansible.builtin.debug:
+        msg: "{{ (ntp_resync.stdout | default('')) ~ (ntp_resync.stderr | default('')) | trim }}"
+      when: ntp_resync is not skipped
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を取得（確認）
+    # =================================================================
+    - name: "[AFTER] 設定を再取得"
+      ansible.windows.win_shell: |
+        $r = [ordered]@{
+          Type             = (Get-ItemProperty '{{ reg_w32_param }}' -Name Type -EA SilentlyContinue).Type
+          NtpServer        = (Get-ItemProperty '{{ reg_w32_param }}' -Name NtpServer -EA SilentlyContinue).NtpServer
+          NtpClientEnabled = ((Get-ItemProperty '{{ reg_w32_client }}' -Name Enabled -EA SilentlyContinue).Enabled -eq 1)
+          ServiceStatus    = (Get-Service w32time).Status.ToString()
+          Source           = (w32tm /query /source)
+        }
+        $r | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: ntp_after_raw
+
+    - name: "[AFTER] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        ntp_after: "{{ ntp_after_raw.stdout | from_json }}"
+
+    - name: "[AFTER] 変更後の設定を表示"
+      ansible.builtin.debug:
+        var: ntp_after
+
+    - name: "[AFTER] 設定値が反映されたことを確認"
+      ansible.builtin.assert:
+        that:
+          - ntp_after.Type == ('NTP' if (ntp_enabled | bool) else 'NoSync')
+          - (not (ntp_enabled | bool)) or (ntp_after.NtpServer == ntp_servers)
+          - (not (ntp_enabled | bool)) or (ntp_after.NtpClientEnabled | bool)
+        success_msg: "時刻同期の設定がパラメータシートの値と一致しました ({{ ntp_after }})。"
+        fail_msg: "設定値が一致しません (実際={{ ntp_after }} / 期待: 同期={{ ntp_enabled | bool }}, サーバー={{ ntp_servers }})。"
