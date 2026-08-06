@@ -7,8 +7,9 @@
 #   PHASE 3  変更後の設定情報を取得して確認
 #
 # 設定値は vars/13_rdp.yml で定義。値は文字列で渡るため `| bool` で評価する。
-# ファイアウォール規則は GUI のチェックと連動するため併せて切り替える。
-# 規則の指定は表示名ではなくグループ ID を使う（日本語環境で名前が変わるため）。
+# ファイアウォール規則は GUI のチェックと連動するため、既存の RDP 規則を
+# Set-NetFirewallRule で有効化/無効化する（新しい規則は作らない）。
+# 規則の指定には表示名ではなく規則名（言語に依存しない固定 ID）を使う。
 # =====================================================================
 - name: "13_リモートデスクトップ設定"
   hosts: windows
@@ -20,7 +21,6 @@
   vars:
     reg_ts: 'HKLM:\System\CurrentControlSet\Control\Terminal Server'
     reg_rdp: 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
-    fw_group: '@FirewallAPI.dll,-28752'
     rdp_allow: "{{ rdp_allow_connections | default(true) | bool }}"
     rdp_nla: "{{ rdp_require_nla | default(true) | bool }}"
 
@@ -30,11 +30,16 @@
     # =================================================================
     - name: "[BEFORE] 現在設定を取得"
       ansible.windows.win_shell: |
+        $names = '{{ rdp_firewall_rules | to_json }}' | ConvertFrom-Json
+        $fw = @(Get-NetFirewallRule -Name $names -EA SilentlyContinue)
         $r = [ordered]@{
           # fDenyTSConnections は値が反転している（0 = 接続を許可する）
           AllowConnections = ((Get-ItemProperty '{{ reg_ts }}' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections -eq 0)
           RequireNLA       = ((Get-ItemProperty '{{ reg_rdp }}' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication -eq 1)
-          FirewallEnabled  = [bool](Get-NetFirewallRule -Group '{{ fw_group }}' -EA SilentlyContinue | Where-Object { $_.Enabled -eq 'True' })
+          # 実在する対象規則が全て有効なら True
+          FirewallEnabled  = (($fw.Count -gt 0) -and (@($fw | Where-Object { $_.Enabled -ne 'True' }).Count -eq 0))
+          # 対象サーバーに存在しない規則（エラーにせずスキップする）
+          MissingRules     = @($names | Where-Object { $fw.Name -notcontains $_ })
         }
         $r | ConvertTo-Json -Compress
       args:
@@ -72,9 +77,13 @@
         type: dword
       when: (rdp_before.RequireNLA | bool) != (rdp_nla | bool)
 
+    # 既存の RDP 規則（TCP/UDP 3389）を有効化/無効化する。新しい規則は作成しない。
     - name: "リモートデスクトップのファイアウォール規則を切り替え"
       ansible.windows.win_shell: |
-        {{ 'Enable-NetFirewallRule' if (rdp_allow | bool) else 'Disable-NetFirewallRule' }} -Group '{{ fw_group }}'
+        $names = '{{ rdp_firewall_rules | to_json }}' | ConvertFrom-Json
+        # 存在しない規則を指定すると Set-NetFirewallRule が失敗するため、実在するものだけを対象にする
+        $exist = @(Get-NetFirewallRule -Name $names -EA SilentlyContinue).Name
+        if ($exist.Count -gt 0) { Set-NetFirewallRule -Name $exist -Enabled {{ 'True' if (rdp_allow | bool) else 'False' }} }
       args:
         executable: powershell
       when: (rdp_before.FirewallEnabled | bool) != (rdp_allow | bool)
@@ -84,10 +93,15 @@
     # =================================================================
     - name: "[AFTER] 設定を再取得"
       ansible.windows.win_shell: |
+        $names = '{{ rdp_firewall_rules | to_json }}' | ConvertFrom-Json
+        $fw = @(Get-NetFirewallRule -Name $names -EA SilentlyContinue)
         $r = [ordered]@{
           AllowConnections = ((Get-ItemProperty '{{ reg_ts }}' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections -eq 0)
           RequireNLA       = ((Get-ItemProperty '{{ reg_rdp }}' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication -eq 1)
-          FirewallEnabled  = [bool](Get-NetFirewallRule -Group '{{ fw_group }}' -EA SilentlyContinue | Where-Object { $_.Enabled -eq 'True' })
+          # 実在する対象規則が全て有効なら True
+          FirewallEnabled  = (($fw.Count -gt 0) -and (@($fw | Where-Object { $_.Enabled -ne 'True' }).Count -eq 0))
+          # 対象サーバーに存在しない規則（エラーにせずスキップする）
+          MissingRules     = @($names | Where-Object { $fw.Name -notcontains $_ })
         }
         $r | ConvertTo-Json -Compress
       args:
@@ -111,3 +125,8 @@
           - (rdp_after.FirewallEnabled | bool) == (rdp_allow | bool)
         success_msg: "リモートデスクトップの設定がパラメータシートの値と一致しました ({{ rdp_after }})。"
         fail_msg: "設定値が一致しません (実際={{ rdp_after }} / 期待: 許可={{ rdp_allow | bool }}, NLA={{ rdp_nla | bool }})。"
+
+    - name: "[AFTER] 存在しなかったファイアウォール規則を報告"
+      ansible.builtin.debug:
+        msg: "対象サーバーに存在しないためスキップした規則: {{ rdp_after.MissingRules }}"
+      when: (rdp_after.MissingRules | length) > 0
