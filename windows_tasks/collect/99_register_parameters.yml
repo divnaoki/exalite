@@ -1,0 +1,126 @@
+---
+# =====================================================================
+# 99_設定情報を Exastro のパラメータシートへ登録
+#
+# 各 collect Playbook が {{ __conductor_workflowdir__ }} に出力した
+# 変数ファイルをまとめて読み込み、ホストごとに1レコードへマージして
+# Exastro のパラメータシートへ API で登録する。
+#
+# 処理の流れ:
+#   1. 作業ディレクトリの変数ファイルを include_vars で全て読み込む
+#   2. 変数名が collected_ で始まるものを集める
+#   3. host_name ごとにマージして登録用レコードを組み立てる
+#   4. メニューの maintenance API へ POST する
+#
+# 接続情報は vars/99_register_parameters.yml で定義。
+# パスワードは extra-vars / Exastro の機密パラメータで渡すこと。
+#
+# 本 Playbook は Exastro（Ansible 実行ホスト）側で完結するため
+# hosts: localhost で実行する。
+# =====================================================================
+- name: "99_設定情報をパラメータシートへ登録"
+  hosts: localhost
+  gather_facts: false
+  connection: local
+
+  vars_files:
+    - vars/99_register_parameters.yml
+
+  tasks:
+    # =================================================================
+    # 1. 変数ファイルの読み込み
+    # =================================================================
+    - name: "作業ディレクトリの変数ファイルを読み込む"
+      ansible.builtin.include_vars:
+        dir: "{{ collect_dir }}/"
+        extensions:
+          - "yml"
+          - "yaml"
+      delegate_to: localhost
+
+    # =================================================================
+    # 2. 収集結果の抽出
+    # =================================================================
+    # collect Playbook は「設定 × ホスト」で一意な変数名
+    # （collected_<設定>__<ホスト名>）で出力しているため、
+    # プレフィックスで拾えば設定を増やしても登録側の修正は不要。
+    - name: "収集した変数を抽出"
+      ansible.builtin.set_fact:
+        collected_all: >-
+          {{ vars | dict2items
+             | selectattr('key', 'match', '^collected_')
+             | map(attribute='value') | list }}
+
+    - name: "[GUARD] 収集結果が存在するか検証"
+      ansible.builtin.assert:
+        that:
+          - (collected_all | length) > 0
+        success_msg: "収集結果を {{ collected_all | length }} 件読み込みました。"
+        fail_msg: >-
+          {{ collect_dir }} に収集結果の変数ファイルがありません。
+          先に各 collect Playbook を実行してください。
+
+    - name: "対象ホストを抽出"
+      ansible.builtin.set_fact:
+        collected_hosts: "{{ collected_all | map(attribute='host_name') | unique | list }}"
+
+    # =================================================================
+    # 3. ホストごとに1レコードへマージ
+    # =================================================================
+    - name: "登録用レコードを組み立て"
+      ansible.builtin.set_fact:
+        exastro_records: >-
+          {{ exastro_records | default([]) + [ {
+               'parameter': (collected_all | selectattr('host_name', 'eq', item) | list | combine),
+               'type': exastro_record_type
+             } ] }}
+      loop: "{{ collected_hosts }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: "登録内容を表示"
+      ansible.builtin.debug:
+        var: exastro_records
+
+    - name: "登録件数を表示"
+      ansible.builtin.debug:
+        msg: >-
+          {{ collected_hosts | length }} ホスト /
+          {{ exastro_records | map(attribute='parameter') | map('length') | sum }} 項目を
+          メニュー「{{ exastro_menu }}」へ {{ exastro_record_type }} します。
+
+    # =================================================================
+    # 4. パラメータシートへ登録
+    # =================================================================
+    # maintenance/all は複数レコードをまとめて登録できるため1回の POST で送る。
+    - name: "パラメータシートへレコード登録"
+      ansible.builtin.uri:
+        url: >-
+          {{ exastro_base_url }}/api/{{ exastro_organization }}/workspaces/{{ exastro_workspace }}/ita/menu/{{ exastro_menu }}/maintenance/all/
+        method: POST
+        validate_certs: "{{ exastro_validate_certs | bool }}"
+        headers:
+          Content-Type: "application/json"
+        body_format: json
+        force_basic_auth: true
+        user: "{{ exastro_user }}"
+        password: "{{ exastro_password }}"
+        body: "{{ exastro_records }}"
+        status_code: [200, 201]
+      register: exastro_result
+      ignore_errors: "{{ exastro_ignore_errors | bool }}"
+      no_log: true
+
+    - name: "登録結果を表示"
+      ansible.builtin.debug:
+        msg:
+          - "HTTP ステータス : {{ exastro_result.status | default('取得できず') }}"
+          - "結果            : {{ exastro_result.json.result | default(exastro_result.json | default('レスポンスなし')) }}"
+
+    - name: "[RESULT] 登録に失敗した場合の内容を表示"
+      ansible.builtin.debug:
+        msg: >-
+          登録に失敗しました:
+          {{ exastro_result.msg | default('') }} /
+          {{ exastro_result.json | default('') }}
+      when: exastro_result is failed

@@ -1,0 +1,55 @@
+---
+# =====================================================================
+# [収集] 13_リモートデスクトップ -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_rdp__<ホスト名>
+# =====================================================================
+- name: "[収集] 13_リモートデスクトップ"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - ../vars/13_rdp.yml
+
+  vars:
+    reg_ts: 'HKLM:\System\CurrentControlSet\Control\Terminal Server'
+    reg_rdp: 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+    var_key: "collected_rdp__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+
+  tasks:
+    - name: "現在のリモートデスクトップ設定を取得"
+      ansible.windows.win_shell: |
+        $names = '{{ rdp_firewall_rules | to_json }}' | ConvertFrom-Json
+        $fw = @(Get-NetFirewallRule -Name $names -EA SilentlyContinue)
+        [ordered]@{
+          # fDenyTSConnections は値が反転している（0 = 接続を許可する）
+          AllowConnections = ((Get-ItemProperty '{{ reg_ts }}' -Name fDenyTSConnections -EA SilentlyContinue).fDenyTSConnections -eq 0)
+          RequireNLA       = ((Get-ItemProperty '{{ reg_rdp }}' -Name UserAuthentication -EA SilentlyContinue).UserAuthentication -eq 1)
+          FirewallEnabled  = (($fw.Count -gt 0) -and (@($fw | Where-Object { $_.Enabled -ne 'True' }).Count -eq 0))
+        } | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: rdp_raw
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        rdp_record:
+          host_name: "{{ inventory_hostname }}"
+          rdp_allow_connections: "{{ 'TRUE' if (cur.AllowConnections | bool) else 'FALSE' }}"
+          rdp_require_nla: "{{ 'TRUE' if (cur.RequireNLA | bool) else 'FALSE' }}"
+          rdp_firewall_enabled: "{{ 'TRUE' if (cur.FirewallEnabled | bool) else 'FALSE' }}"
+      vars:
+        cur: "{{ rdp_raw.stdout | from_json }}"
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/rdp_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: rdp_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: rdp_record

@@ -1,0 +1,106 @@
+---
+# =====================================================================
+# [収集] 15_Windows ファイアウォール -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_fw__<ホスト名>
+# 値はパラメータシートと同じ表記（有効（推奨）/ ブロック（既定）等）で登録する。
+# =====================================================================
+- name: "[収集] 15_Windows ファイアウォール"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - ../vars/15_firewall.yml
+
+  vars:
+    var_key: "collected_fw__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    # 取得値 -> パラメータシートの表記
+    fw_state_labels:
+      "True": "有効（推奨）"
+      "False": "無効"
+    fw_action_labels:
+      "Block": "ブロック（既定）"
+      "Allow": "許可（既定）"
+      "NotConfigured": "未構成"
+    fw_profile_labels:
+      "Any": "すべて"
+
+  tasks:
+    - name: "現在のファイアウォール設定を取得"
+      ansible.windows.win_shell: |
+        $names = '{{ fw_profile_settings | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $profiles = @(Get-NetFirewallProfile -Profile $names | ForEach-Object {
+          [ordered]@{
+            Name     = $_.Name
+            Enabled  = ($_.Enabled.ToString() -eq 'True')
+            Inbound  = $_.DefaultInboundAction.ToString()
+            Outbound = $_.DefaultOutboundAction.ToString()
+          }
+        })
+        $ruleNames = '{{ fw_rules | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $rules = @(Get-NetFirewallRule -Name $ruleNames -EA SilentlyContinue | ForEach-Object {
+          [ordered]@{
+            Name    = $_.Name
+            Enabled = ($_.Enabled.ToString() -eq 'True')
+            Profile = $_.Profile.ToString()
+          }
+        })
+        [ordered]@{ Profiles = $profiles; Rules = $rules } | ConvertTo-Json -Compress -Depth 4
+      args:
+        executable: powershell
+      changed_when: false
+      register: fw_raw
+
+    - name: "取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        fw_cur: "{{ fw_raw.stdout | from_json }}"
+
+    - name: "プロファイル名で引ける辞書を作成"
+      ansible.builtin.set_fact:
+        fw_cur_map: "{{ dict(fw_cur.Profiles | map(attribute='Name') | zip(fw_cur.Profiles)) }}"
+        fw_rule_map: "{{ dict(fw_cur.Rules | map(attribute='Name') | zip(fw_cur.Rules)) }}"
+
+    # プロファイル3種 × 3項目を、シートと同じ変数名で1レコードにまとめる
+    - name: "登録用レコードを作成（プロファイル）"
+      ansible.builtin.set_fact:
+        fw_record: >-
+          {{ fw_record | default({'host_name': inventory_hostname}) | combine({
+               ('fw_' ~ (item.name | lower) ~ '_enabled'):
+                 (fw_state_labels[(fw_cur_map[item.name].Enabled | string)] | default('不明', true)),
+               ('fw_' ~ (item.name | lower) ~ '_inbound'):
+                 (fw_action_labels[fw_cur_map[item.name].Inbound] | default(fw_cur_map[item.name].Inbound, true)),
+               ('fw_' ~ (item.name | lower) ~ '_outbound'):
+                 (fw_action_labels[fw_cur_map[item.name].Outbound] | default(fw_cur_map[item.name].Outbound, true))
+             }) }}
+      loop: "{{ fw_profile_settings }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+    # 受信の規則（存在しない場合は「存在しない」を登録して取りこぼしを残す）
+    - name: "登録用レコードを作成（受信の規則）"
+      ansible.builtin.set_fact:
+        fw_record: >-
+          {{ fw_record | combine({
+               ('fw_rule_' ~ (item.name | lower | regex_replace('[^0-9a-z]', '_')) ~ '_enabled'):
+                 ('存在しない' if (item.name not in fw_rule_map)
+                  else ('TRUE' if (fw_rule_map[item.name].Enabled | bool) else 'FALSE')),
+               ('fw_rule_' ~ (item.name | lower | regex_replace('[^0-9a-z]', '_')) ~ '_profile'):
+                 ('存在しない' if (item.name not in fw_rule_map)
+                  else (fw_profile_labels[fw_rule_map[item.name].Profile]
+                        | default(fw_rule_map[item.name].Profile, true)))
+             }) }}
+      loop: "{{ fw_rules }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/fw_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: fw_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: fw_record

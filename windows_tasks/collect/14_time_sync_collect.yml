@@ -1,0 +1,57 @@
+---
+# =====================================================================
+# [収集] 14_時刻同期 -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_ntp__<ホスト名>
+# =====================================================================
+- name: "[収集] 14_時刻同期"
+  hosts: windows
+  gather_facts: false
+
+  vars:
+    reg_w32_param: 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters'
+    reg_dt_servers: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DateTime\Servers'
+    var_key: "collected_ntp__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+
+  tasks:
+    - name: "現在の時刻同期設定を取得"
+      ansible.windows.win_shell: |
+        # GUI のサーバー欄は NtpServer ではなく DateTime\Servers の
+        # 既定インデックスが指すエントリを表示する
+        $d = (Get-ItemProperty '{{ reg_dt_servers }}' -EA SilentlyContinue).'(default)'
+        $gui = if ($d) { (Get-ItemProperty '{{ reg_dt_servers }}' -Name $d -EA SilentlyContinue).$d } else { $null }
+        [ordered]@{
+          Type      = (Get-ItemProperty '{{ reg_w32_param }}' -Name Type -EA SilentlyContinue).Type
+          NtpServer = (Get-ItemProperty '{{ reg_w32_param }}' -Name NtpServer -EA SilentlyContinue).NtpServer
+          GuiServer = $gui
+          Source    = (w32tm /query /source)
+        } | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: ntp_raw
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        ntp_record:
+          host_name: "{{ inventory_hostname }}"
+          ntp_sync_enabled: "{{ 'TRUE' if (cur.Type == 'NTP') else 'FALSE' }}"
+          # GUI のサーバー欄に表示される値（シートの「サーバー」に対応）
+          ntp_server: "{{ cur.GuiServer | default('未設定', true) }}"
+          # 実体のレジストリ値（フラグ付き）と実際の同期元
+          ntp_server_raw: "{{ cur.NtpServer | default('未設定', true) }}"
+          ntp_source: "{{ cur.Source | default('', true) | trim }}"
+      vars:
+        cur: "{{ ntp_raw.stdout | from_json }}"
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/ntp_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: ntp_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: ntp_record

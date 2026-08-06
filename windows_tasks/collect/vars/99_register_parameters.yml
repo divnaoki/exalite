@@ -1,0 +1,39 @@
+# =====================================================================
+# 99_パラメータシート登録 : 接続情報
+#
+# !!! 重要 !!! パスワードはこのファイルに書かないこと。
+# Exastro の機密パラメータ、または extra-vars で渡す。
+#   ansible-playbook 99_register_parameters.yml \
+#     -e '{"exastro_password":"＜パスワード＞"}'
+# =====================================================================
+
+# Exastro の URL（末尾のスラッシュなし）
+exastro_base_url: "http://10.197.18.118"
+
+# 組織 ID / ワークスペース ID
+exastro_organization: "omca-kab"
+exastro_workspace: "omca-kab-dev1"
+
+# 登録先パラメータシートのメニュー ID
+# （画面 URL の /ita/menu/<ここ>/ の部分）
+exastro_menu: "check_parameter"
+
+# 認証
+exastro_user: "admin"
+exastro_password: ""     # ← ここには書かない。extra-vars / 機密パラメータで渡す
+
+# 自己署名証明書の環境では false のままにする
+exastro_validate_certs: false
+
+# 登録時の type
+#   Register = 新規登録 / Update = 更新
+exastro_record_type: "Register"
+
+# 変数ファイルの置き場所。
+# Exastro の Conductor から実行する場合は __conductor_workflowdir__ が渡るため
+# 通常は変更不要。単体でテストするときだけ extra-vars で上書きする。
+collect_dir: "{{ __conductor_workflowdir__ }}"
+
+# API 呼び出しが失敗しても Playbook を止めない（参考実装に合わせる）。
+# 登録漏れに気付けなくなるため、既定では止める設定にしている。
+exastro_ignore_errors: false
