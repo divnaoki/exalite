@@ -3,20 +3,24 @@
 # 99_設定情報を Exastro のパラメータシートへ登録
 #
 # 各 collect Playbook が {{ __conductor_workflowdir__ }} に出力した
-# 変数ファイルをまとめて読み込み、ホストごとに1レコードへマージして
-# Exastro のパラメータシートへ API で登録する。
+# 変数ファイルをまとめて読み込み、「1設定項目 = 1レコード」（縦持ち）で
+# Exastro のパラメータシートへ API 登録する。
 #
-# 処理の流れ:
-#   1. 作業ディレクトリの変数ファイルを include_vars で全て読み込む
-#   2. 変数名が collected_ で始まるものを集める
-#   3. host_name ごとにマージして登録用レコードを組み立てる
-#   4. メニューの maintenance API へ POST する
+# 変数ファイルの形:
+#   collected_<大項目キー>__<ホスト名>:
+#     menu: "check_parameter"                    # 登録先のパラメータシート
+#     host_name: "SV01"
+#     section: "(10) Windowsファイアウォール"
+#     rows:
+#       - key:  "s10_fw_domain_enabled"
+#         item: "ドメイン プロファイル / ファイアウォールの状態"
+#         value: "有効（推奨）"
+#
+# 登録されるレコード（列名は vars/sections.yml の param_columns で変更できる）:
+#   host_name / operation_name_select / 大項目 / 項目名 / 項目キー / 設定値
 #
 # 接続情報は vars/99_register_parameters.yml で定義。
 # パスワードは extra-vars / Exastro の機密パラメータで渡すこと。
-#
-# 本 Playbook は Exastro（Ansible 実行ホスト）側で完結するため
-# hosts: localhost で実行する。
 # =====================================================================
 - name: "99_設定情報をパラメータシートへ登録"
   hosts: localhost
@@ -24,6 +28,7 @@
   connection: local
 
   vars_files:
+    - vars/sections.yml
     - vars/99_register_parameters.yml
 
   tasks:
@@ -41,9 +46,8 @@
     # =================================================================
     # 2. 収集結果の抽出
     # =================================================================
-    # collect Playbook は「設定 × ホスト」で一意な変数名
-    # （collected_<設定>__<ホスト名>）で出力しているため、
-    # プレフィックスで拾えば設定を増やしても登録側の修正は不要。
+    # collect Playbook は「大項目 × ホスト」で一意な変数名で出力しているため、
+    # プレフィックスで拾えば大項目を増やしても登録側の修正は不要。
     - name: "収集した変数を抽出"
       ansible.builtin.set_fact:
         collected_all: >-
@@ -60,43 +64,67 @@
           {{ collect_dir }} に収集結果の変数ファイルがありません。
           先に各 collect Playbook を実行してください。
 
-    - name: "対象ホストを抽出"
-      ansible.builtin.set_fact:
-        collected_hosts: "{{ collected_all | map(attribute='host_name') | unique | list }}"
+    - name: "収集した大項目を表示"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.section }} / {{ item.host_name }} :
+          {{ item.rows | length }} 項目（登録先: {{ item.menu }}）
+      loop: "{{ collected_all }}"
+      loop_control:
+        label: "{{ item.section | default('') }} / {{ item.host_name }}"
 
     # =================================================================
-    # 3. ホストごとに1レコードへマージ
+    # 3. 1設定項目 = 1レコードに展開
     # =================================================================
-    - name: "登録用レコードを組み立て"
+    # 大項目のレコードを rows で展開し、ホスト・オペレーション・列名を付けて
+    # 登録用のレコードにする。
+    - name: "登録用レコードへ展開"
       ansible.builtin.set_fact:
         exastro_records: >-
           {{ exastro_records | default([]) + [ {
-               'parameter': (collected_all | selectattr('host_name', 'eq', item) | list | combine),
-               'type': exastro_record_type
+               'menu': item.0.menu,
+               'record': {
+                 'parameter': ({
+                     exastro_host_column: item.0.host_name,
+                     param_columns.section: item.0.section,
+                     param_columns.item: item.1.item,
+                     param_columns.key: item.1.key,
+                     param_columns.value: (item.1.value | string)
+                   } | combine(
+                     { exastro_operation_column: exastro_operation_value }
+                     if (exastro_use_operation | bool) else {})),
+                 'type': exastro_record_type
+               }
              } ] }}
-      loop: "{{ collected_hosts }}"
+      loop: "{{ collected_all | subelements('rows') }}"
       loop_control:
-        label: "{{ item }}"
+        label: "{{ item.0.host_name }} / {{ item.1.key }}"
 
     - name: "登録内容を表示"
       ansible.builtin.debug:
         var: exastro_records
 
+    - name: "メニュー一覧を抽出"
+      ansible.builtin.set_fact:
+        target_menus: "{{ exastro_records | map(attribute='menu') | unique | list }}"
+
     - name: "登録件数を表示"
       ansible.builtin.debug:
         msg: >-
-          {{ collected_hosts | length }} ホスト /
-          {{ exastro_records | map(attribute='parameter') | map('length') | sum }} 項目を
-          メニュー「{{ exastro_menu }}」へ {{ exastro_record_type }} します。
+          メニュー {{ target_menus | length }} 件 /
+          レコード {{ exastro_records | length }} 件を
+          {{ exastro_record_type }} します
+          （ホスト: {{ collected_all | map(attribute='host_name') | unique | list }}）。
 
     # =================================================================
     # 4. パラメータシートへ登録
     # =================================================================
-    # maintenance/all は複数レコードをまとめて登録できるため1回の POST で送る。
+    # maintenance/all は複数レコードをまとめて登録できるため、
+    # メニュー単位に1回の POST でまとめて送る。
     - name: "パラメータシートへレコード登録"
       ansible.builtin.uri:
         url: >-
-          {{ exastro_base_url }}/api/{{ exastro_organization }}/workspaces/{{ exastro_workspace }}/ita/menu/{{ exastro_menu }}/maintenance/all/
+          {{ exastro_base_url }}/api/{{ exastro_organization }}/workspaces/{{ exastro_workspace }}/ita/menu/{{ item }}/maintenance/all/
         method: POST
         validate_certs: "{{ exastro_validate_certs | bool }}"
         headers:
@@ -105,22 +133,32 @@
         force_basic_auth: true
         user: "{{ exastro_user }}"
         password: "{{ exastro_password }}"
-        body: "{{ exastro_records }}"
+        body: >-
+          {{ exastro_records | selectattr('menu', 'eq', item)
+             | map(attribute='record') | list }}
         status_code: [200, 201]
+      loop: "{{ target_menus }}"
+      loop_control:
+        label: "{{ item }}"
       register: exastro_result
       ignore_errors: "{{ exastro_ignore_errors | bool }}"
       no_log: true
 
     - name: "登録結果を表示"
       ansible.builtin.debug:
-        msg:
-          - "HTTP ステータス : {{ exastro_result.status | default('取得できず') }}"
-          - "結果            : {{ exastro_result.json.result | default(exastro_result.json | default('レスポンスなし')) }}"
+        msg: >-
+          メニュー {{ item.item }} : HTTP {{ item.status | default('取得できず') }} /
+          {{ item.json.result | default(item.json | default('レスポンスなし')) }}
+      loop: "{{ exastro_result.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
 
-    - name: "[RESULT] 登録に失敗した場合の内容を表示"
+    - name: "[RESULT] 登録に失敗したメニューを表示"
       ansible.builtin.debug:
         msg: >-
-          登録に失敗しました:
-          {{ exastro_result.msg | default('') }} /
-          {{ exastro_result.json | default('') }}
-      when: exastro_result is failed
+          メニュー {{ item.item }} の登録に失敗しました:
+          {{ item.msg | default('') }} / {{ item.json | default('') }}
+      loop: "{{ exastro_result.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item | default('') }}"
+      when: item is failed

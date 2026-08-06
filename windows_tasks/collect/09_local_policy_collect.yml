@@ -1,0 +1,87 @@
+---
+# =====================================================================
+# [収集] (9) ローカルセキュリティポリシー -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_policy__<ホスト名>
+# 値はシートと同じ「有効 / 無効 / 未構成」で登録する。
+#
+# 対象（08_local_policy.yml と同じレジストリ）:
+#   自動更新を構成する
+#   リモートデスクトップサービスユーザーに対してセッションを1つに制限する
+#   アクティブでアイドル状態のセッションの制限時間を設定する
+# =====================================================================
+- name: "[収集] (9) ローカルセキュリティポリシー"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/sections.yml
+
+  vars:
+    sec: "{{ param_sections.policy }}"
+    sec_menu: "{{ param_section_menus.policy | default(param_section_menu_default) }}"
+    var_key: "collected_policy__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    reg_wu_au: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+    reg_ts: 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
+
+  tasks:
+    - name: "現在のポリシー設定を取得"
+      ansible.windows.win_shell: |
+        function Get-PolicyValue($path, $name) {
+          $p = Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue
+          if ($null -eq $p) { return $null }
+          return [int]$p.$name
+        }
+        [ordered]@{
+          # 値が無い = ポリシー未構成
+          NoAutoUpdate          = Get-PolicyValue '{{ reg_wu_au }}' 'NoAutoUpdate'
+          AUOptions             = Get-PolicyValue '{{ reg_wu_au }}' 'AUOptions'
+          fSingleSessionPerUser = Get-PolicyValue '{{ reg_ts }}' 'fSingleSessionPerUser'
+          MaxIdleTime           = Get-PolicyValue '{{ reg_ts }}' 'MaxIdleTime'
+        } | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: policy_raw
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        policy_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': [
+                 { 'key': (sec.prefix ~ '_configure_auto_update'),
+                   'item': '管理用テンプレート / Windowsコンポーネント / Windows Update / 自動更新を構成する',
+                   'value': ('未構成' if cur.NoAutoUpdate is none
+                             else ('無効' if (cur.NoAutoUpdate | int) == 1 else '有効')) },
+                 { 'key': (sec.prefix ~ '_au_options'),
+                   'item': '自動更新を構成する / 構成オプション',
+                   'value': ('未構成' if cur.AUOptions is none else (cur.AUOptions | string)) },
+                 { 'key': (sec.prefix ~ '_rds_single_session'),
+                   'item': 'リモートデスクトップサービス / 接続 / リモートデスクトップサービスユーザーに対してリモートデスクトップサービスセッションを1つに制限する',
+                   'value': ('未構成' if cur.fSingleSessionPerUser is none
+                             else ('有効' if (cur.fSingleSessionPerUser | int) == 1 else '無効')) },
+                 { 'key': (sec.prefix ~ '_rds_idle_time_limit'),
+                   'item': 'リモートデスクトップサービス / セッションの時間制限 / アクティブでアイドル状態になっているリモートデスクトップサービスセッションの制限時間を設定する',
+                   'value': ('未構成' if cur.MaxIdleTime is none
+                             else ('無効' if (cur.MaxIdleTime | int) == 0 else '有効')) },
+                 { 'key': (sec.prefix ~ '_rds_idle_time_limit_minutes'),
+                   'item': 'アイドルセッションの制限',
+                   'value': ('未構成' if cur.MaxIdleTime is none
+                             else (((cur.MaxIdleTime | int) // 60000) | string ~ '分')) }
+               ] } }}
+      vars:
+        cur: "{{ policy_raw.stdout | from_json }}"
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: policy_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: policy_record

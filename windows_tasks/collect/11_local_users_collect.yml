@@ -1,21 +1,25 @@
 ---
 # =====================================================================
-# [収集] 11_ローカルユーザー -> パラメータシート用の変数ファイル出力
+# [収集] (6) コンピューターの管理 / ローカルユーザーとグループ
+#        -> パラメータシート用の変数ファイル出力
 #
-# 出力する変数名: collected_users__<ホスト名>
-# 項目名は user_<ユーザー名>_<項目> とし、値は TRUE / FALSE / グループ名。
+# 出力する変数名: collected_computermgmt__<ホスト名>
+# 項目名は s06_computermgmt_user_<ユーザー名>_<項目>。
 #
 # ※ パスワードは取得も出力もしない。
 # =====================================================================
-- name: "[収集] 11_ローカルユーザー"
+- name: "[収集] (6) コンピューターの管理（ローカルユーザー）"
   hosts: windows
   gather_facts: false
 
   vars_files:
+    - vars/sections.yml
     - ../vars/11_local_users.yml
 
   vars:
-    var_key: "collected_users__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    sec: "{{ param_sections.computermgmt }}"
+    sec_menu: "{{ param_section_menus.computermgmt | default(param_section_menu_default) }}"
+    var_key: "collected_computermgmt__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
 
   tasks:
     - name: "現在のローカルユーザー設定を取得"
@@ -71,31 +75,51 @@
           {{ dict((users_raw.stdout | from_json) | map(attribute='Name')
              | zip(users_raw.stdout | from_json)) }}
 
-    # 存在しないユーザーは exists=FALSE のみ登録し、他の項目は出力しない
-    # （未取得と FALSE を取り違えないようにするため）
-    - name: "登録用レコードを作成"
+    # ユーザー × 項目 = 1レコード。
+    # 存在しないユーザーは「存在」のみ出力し、他の項目は出力しない
+    # （未取得と FALSE を取り違えないようにするため）。
+    - name: "項目を組み立て"
       ansible.builtin.set_fact:
-        users_record: >-
-          {{ users_record | default({'host_name': inventory_hostname}) | combine(
-               { (k ~ '_exists'): ('TRUE' if (u.Exists | bool) else 'FALSE') }
-               | combine({
-                   (k ~ '_must_change_password'): ('TRUE' if (u.MustChangePassword | bool) else 'FALSE'),
-                   (k ~ '_cannot_change_password'): ('TRUE' if (u.CannotChangePassword | bool) else 'FALSE'),
-                   (k ~ '_password_never_expires'): ('TRUE' if (u.PasswordNeverExpires | bool) else 'FALSE'),
-                   (k ~ '_account_disabled'): ('TRUE' if (u.Disabled | bool) else 'FALSE'),
-                   (k ~ '_groups'): (u.Groups | join(', '))
-                 } if (u.Exists | bool) else {})
-             ) }}
+        users_rows: >-
+          {{ users_rows | default([])
+             + [ { 'key': (k ~ '_exists'),
+                   'item': (base ~ ' / ユーザーの存在'),
+                   'value': ('TRUE' if (u.Exists | bool) else 'FALSE') } ]
+             + ([ { 'key': (k ~ '_must_change_password'),
+                    'item': (base ~ ' / ユーザーは次回ログオン時にパスワードの変更が必要'),
+                    'value': ('TRUE' if (u.MustChangePassword | bool) else 'FALSE') },
+                  { 'key': (k ~ '_cannot_change_password'),
+                    'item': (base ~ ' / ユーザーはパスワードを変更できない'),
+                    'value': ('TRUE' if (u.CannotChangePassword | bool) else 'FALSE') },
+                  { 'key': (k ~ '_password_never_expires'),
+                    'item': (base ~ ' / パスワードを無期限にする'),
+                    'value': ('TRUE' if (u.PasswordNeverExpires | bool) else 'FALSE') },
+                  { 'key': (k ~ '_account_disabled'),
+                    'item': (base ~ ' / アカウントを無効にする'),
+                    'value': ('TRUE' if (u.Disabled | bool) else 'FALSE') },
+                  { 'key': (k ~ '_groups'),
+                    'item': (base ~ ' / 所属するグループ'),
+                    'value': (u.Groups | join(', ')) } ]
+                if (u.Exists | bool) else []) }}
       vars:
-        k: "user_{{ item.name | regex_replace('[^0-9a-zA-Z]', '_') }}"
+        k: "{{ sec.prefix }}_user_{{ item.name | regex_replace('[^0-9a-zA-Z]', '_') }}"
+        base: "ローカルユーザーとグループ / {{ item.name }}"
         u: "{{ users_map[item.name] }}"
       loop: "{{ local_users }}"
       loop_control:
         label: "{{ item.name }}"
 
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        users_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': users_rows } }}
+
     - name: "変数ファイルを出力"
       ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/users_{{ inventory_hostname }}.yml"
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_users_{{ inventory_hostname }}.yml"
         mode: '0644'
         content: "{{ { var_key: users_record } | to_nice_yaml }}"
       delegate_to: localhost

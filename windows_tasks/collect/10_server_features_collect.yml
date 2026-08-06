@@ -1,19 +1,22 @@
 ---
 # =====================================================================
-# [収集] 10_サーバーの役割と機能 -> パラメータシート用の変数ファイル出力
+# [収集] (8) 役割と機能 -> パラメータシート用の変数ファイル出力
 #
-# 出力する変数名: collected_features__<ホスト名>
-# 項目名は feature_<機能名> とし、値は TRUE / FALSE / 存在しない。
+# 出力する変数名: collected_feature__<ホスト名>
+# 項目名は s08_feature_<機能名>、値は TRUE / FALSE / 存在しない。
 # =====================================================================
-- name: "[収集] 10_サーバーの役割と機能"
+- name: "[収集] (8) 役割と機能"
   hosts: windows
   gather_facts: false
 
   vars_files:
+    - vars/sections.yml
     - ../vars/10_server_features.yml
 
   vars:
-    var_key: "collected_features__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    sec: "{{ param_sections.feature }}"
+    sec_menu: "{{ param_section_menus.feature | default(param_section_menu_default) }}"
+    var_key: "collected_feature__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
 
   tasks:
     - name: "現在の役割と機能を取得"
@@ -50,21 +53,31 @@
           {{ dict((feat_raw.stdout | from_json) | map(attribute='Name')
              | zip(feat_raw.stdout | from_json)) }}
 
-    - name: "登録用レコードを作成"
+    # 機能1つ = 1レコード。項目名は vars/10_server_features.yml の label（日本語）を使う。
+    - name: "項目を組み立て"
       ansible.builtin.set_fact:
-        feat_record: >-
-          {{ feat_record | default({'host_name': inventory_hostname}) | combine({
-               ('feature_' ~ (item.name | regex_replace('[^0-9a-zA-Z]', '_'))):
-                 ('存在しない' if not (feat_map[item.name].Exists | bool)
-                  else ('TRUE' if (feat_map[item.name].Installed | bool) else 'FALSE'))
-             }) }}
+        feat_rows: >-
+          {{ feat_rows | default([]) + [ {
+               'key': (sec.prefix ~ '_' ~ (item.name | regex_replace('[^0-9a-zA-Z]', '_'))),
+               'item': ((item.label | default(item.name)) ~ ' [' ~ item.name ~ ']'),
+               'value': ('存在しない' if not (feat_map[item.name].Exists | bool)
+                         else ('TRUE' if (feat_map[item.name].Installed | bool) else 'FALSE'))
+             } ] }}
       loop: "{{ target_features }}"
       loop_control:
         label: "{{ item.name }}"
 
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        feat_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': feat_rows } }}
+
     - name: "変数ファイルを出力"
       ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/features_{{ inventory_hostname }}.yml"
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
         mode: '0644'
         content: "{{ { var_key: feat_record } | to_nice_yaml }}"
       delegate_to: localhost
