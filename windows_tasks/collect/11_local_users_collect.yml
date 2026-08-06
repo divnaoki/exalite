@@ -1,0 +1,106 @@
+---
+# =====================================================================
+# [収集] 11_ローカルユーザー -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_users__<ホスト名>
+# 項目名は user_<ユーザー名>_<項目> とし、値は TRUE / FALSE / グループ名。
+#
+# ※ パスワードは取得も出力もしない。
+# =====================================================================
+- name: "[収集] 11_ローカルユーザー"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - ../vars/11_local_users.yml
+
+  vars:
+    var_key: "collected_users__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+
+  tasks:
+    - name: "現在のローカルユーザー設定を取得"
+      ansible.windows.win_shell: |
+        $names = '{{ local_users | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $list = @()
+        foreach ($n in $names) {
+          $obj = $null
+          $exists = $false
+          try {
+            $obj = [ADSI]("WinNT://./" + $n + ",user")
+            # プロパティ参照だけでは存在判定にならないため RefreshCache() を使う
+            $obj.psbase.RefreshCache()
+            $exists = $true
+          } catch { $exists = $false; $obj = $null }
+          if ($exists -and ($null -eq $obj.UserFlags.Value)) { $exists = $false; $obj = $null }
+
+          if ($exists) {
+            $flags = [int]$obj.UserFlags.Value
+            $mustChange = $false
+            try { $mustChange = ([int]$obj.PasswordExpired.Value -eq 1) } catch { $mustChange = $false }
+            $groups = @()
+            try {
+              $groups = @($obj.psbase.Invoke("Groups") | ForEach-Object {
+                $_.GetType().InvokeMember("Name", "GetProperty", $null, $_, $null)
+              })
+            } catch { $groups = @() }
+            $list += [PSCustomObject][ordered]@{
+              Name = $n; Exists = $true
+              MustChangePassword   = $mustChange
+              CannotChangePassword = [bool]($flags -band 0x0040)
+              PasswordNeverExpires = [bool]($flags -band 0x10000)
+              Disabled             = [bool]($flags -band 0x0002)
+              Groups               = $groups
+            }
+          } else {
+            $list += [PSCustomObject][ordered]@{
+              Name = $n; Exists = $false
+              MustChangePassword = $false; CannotChangePassword = $false
+              PasswordNeverExpires = $false; Disabled = $false; Groups = @()
+            }
+          }
+        }
+        ConvertTo-Json -InputObject @($list) -Compress -Depth 5
+      args:
+        executable: powershell
+      changed_when: false
+      register: users_raw
+
+    - name: "取得結果をユーザー名で引ける辞書に格納"
+      ansible.builtin.set_fact:
+        users_map: >-
+          {{ dict((users_raw.stdout | from_json) | map(attribute='Name')
+             | zip(users_raw.stdout | from_json)) }}
+
+    # 存在しないユーザーは exists=FALSE のみ登録し、他の項目は出力しない
+    # （未取得と FALSE を取り違えないようにするため）
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        users_record: >-
+          {{ users_record | default({'host_name': inventory_hostname}) | combine(
+               { (k ~ '_exists'): ('TRUE' if (u.Exists | bool) else 'FALSE') }
+               | combine({
+                   (k ~ '_must_change_password'): ('TRUE' if (u.MustChangePassword | bool) else 'FALSE'),
+                   (k ~ '_cannot_change_password'): ('TRUE' if (u.CannotChangePassword | bool) else 'FALSE'),
+                   (k ~ '_password_never_expires'): ('TRUE' if (u.PasswordNeverExpires | bool) else 'FALSE'),
+                   (k ~ '_account_disabled'): ('TRUE' if (u.Disabled | bool) else 'FALSE'),
+                   (k ~ '_groups'): (u.Groups | join(', '))
+                 } if (u.Exists | bool) else {})
+             ) }}
+      vars:
+        k: "user_{{ item.name | regex_replace('[^0-9a-zA-Z]', '_') }}"
+        u: "{{ users_map[item.name] }}"
+      loop: "{{ local_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/users_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: users_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: users_record

@@ -1,0 +1,72 @@
+---
+# =====================================================================
+# [収集] 12_UAC設定 -> Exastro パラメータシート用の変数ファイル出力
+#
+# 現在の設定を取得し、Conductor の作業ディレクトリ
+# {{ __conductor_workflowdir__ }} に変数ファイルを出力する。
+# 出力したファイルは 99_register_parameters.yml が include_vars で
+# まとめて読み込み、パラメータシートへ登録する。
+#
+# 出力する変数名: collected_uac__<ホスト名>
+#   （設定 × ホストで一意にし、include_vars 時の上書きを防ぐ）
+#
+# 値はパラメータシートと同じ表記（画面表示のラベル）で登録する。
+# =====================================================================
+- name: "[収集] 12_UAC設定"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - ../vars/12_uac.yml
+
+  vars:
+    uac_reg_path: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    var_key: "collected_uac__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+
+  tasks:
+    - name: "現在の UAC 設定を取得"
+      ansible.windows.win_shell: |
+        $path = '{{ uac_reg_path }}'
+        function Get-UacValue($name) {
+          $p = Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue
+          if ($null -eq $p) { return $null }
+          return [int]$p.$name
+        }
+        [ordered]@{
+          EnableLUA                  = Get-UacValue 'EnableLUA'
+          ConsentPromptBehaviorAdmin = Get-UacValue 'ConsentPromptBehaviorAdmin'
+          PromptOnSecureDesktop      = Get-UacValue 'PromptOnSecureDesktop'
+        } | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: uac_raw
+
+    - name: "取得結果をシートの表記に変換"
+      ansible.builtin.set_fact:
+        uac_cur: "{{ uac_raw.stdout | from_json }}"
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        uac_record:
+          host_name: "{{ inventory_hostname }}"
+          # スライダーの位置（対応表にない組み合わせのときはその旨を入れる）
+          uac_notification_setting: >-
+            {{ (uac_levels
+                | selectattr('consent_prompt_behavior_admin', 'eq', uac_cur.ConsentPromptBehaviorAdmin)
+                | selectattr('prompt_on_secure_desktop', 'eq', uac_cur.PromptOnSecureDesktop)
+                | list | first).label
+               | default('対応表にない組み合わせ (ConsentPromptBehaviorAdmin=' ~ uac_cur.ConsentPromptBehaviorAdmin
+                         ~ ', PromptOnSecureDesktop=' ~ uac_cur.PromptOnSecureDesktop ~ ')', true) }}
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/uac_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: uac_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: uac_record
