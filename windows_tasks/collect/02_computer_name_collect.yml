@@ -1,0 +1,64 @@
+---
+# =====================================================================
+# [収集] (2) コンピューター名 -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_computer__<ホスト名>
+# =====================================================================
+- name: "[収集] (2) コンピューター名"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/sections.yml
+
+  vars:
+    sec: "{{ param_sections.computer }}"
+    sec_menu: "{{ param_section_menus.computer | default(param_section_menu_default) }}"
+    var_key: "collected_computer__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+
+  tasks:
+    - name: "現在のコンピューター名を取得"
+      ansible.windows.win_shell: |
+        $cs = Get-CimInstance Win32_ComputerSystem
+        [ordered]@{
+          ComputerName = $cs.Name
+          # ドメイン参加時はドメイン名、ワークグループ時はワークグループ名が入る
+          Domain       = $cs.Domain
+          PartOfDomain = [bool]$cs.PartOfDomain
+        } | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: comp_raw
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        comp_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': [
+                 { 'key': (sec.prefix ~ '_name'),
+                   'item': 'コンピューター名 / 変更 / コンピューター名',
+                   'value': cur.ComputerName },
+                 { 'key': (sec.prefix ~ '_group'),
+                   'item': 'コンピューター名 / 変更 / 所属するグループ',
+                   'value': cur.Domain },
+                 { 'key': (sec.prefix ~ '_group_type'),
+                   'item': 'コンピューター名 / 変更 / 所属種別',
+                   'value': ('ドメイン' if (cur.PartOfDomain | bool) else 'ワークグループ') }
+               ] } }}
+      vars:
+        cur: "{{ comp_raw.stdout | from_json }}"
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: comp_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: comp_record

@@ -1,0 +1,93 @@
+---
+# =====================================================================
+# [収集] (17) サービス -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_service__<ホスト名>
+# 値はシートと同じ「無効 / 自動 / 手動 / 存在しない」で登録する。
+#
+# 対象サービスは vars/07_service_disable.yml の target_services を使う。
+# =====================================================================
+- name: "[収集] (17) サービス"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/sections.yml
+    - ../vars/07_service_disable.yml
+
+  vars:
+    sec: "{{ param_sections.service }}"
+    sec_menu: "{{ param_section_menus.service | default(param_section_menu_default) }}"
+    var_key: "collected_service__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    # StartType -> シートの表記
+    svc_start_labels:
+      "Disabled": "無効"
+      "Automatic": "自動"
+      "Manual": "手動"
+      "Boot": "ブート"
+      "System": "システム"
+
+  tasks:
+    - name: "現在のサービス設定を取得"
+      ansible.windows.win_shell: |
+        $names = '{{ target_services | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $list = @()
+        foreach ($n in $names) {
+          $s = Get-Service -Name $n -ErrorAction SilentlyContinue
+          if ($s) {
+            $list += [PSCustomObject][ordered]@{
+              Name = $n; Exists = $true
+              StartType = $s.StartType.ToString(); Status = $s.Status.ToString()
+            }
+          } else {
+            $list += [PSCustomObject][ordered]@{
+              Name = $n; Exists = $false; StartType = $null; Status = $null
+            }
+          }
+        }
+        ConvertTo-Json -InputObject @($list) -Compress -Depth 4
+      args:
+        executable: powershell
+      changed_when: false
+      register: svc_raw
+
+    - name: "取得結果をサービス名で引ける辞書に格納"
+      ansible.builtin.set_fact:
+        svc_map: >-
+          {{ dict((svc_raw.stdout | from_json) | map(attribute='Name')
+             | zip(svc_raw.stdout | from_json)) }}
+
+    # サービス1つ = 1レコード（値はスタートアップの種類）
+    - name: "項目を組み立て"
+      ansible.builtin.set_fact:
+        svc_rows: >-
+          {{ svc_rows | default([]) + [ {
+               'key': (sec.prefix ~ '_' ~ (item.name | regex_replace('[^0-9a-zA-Z]', '_'))),
+               'item': ('サービス / ' ~ item.name ~ ' / スタートアップの種類'),
+               'value': ('存在しない' if not (svc_map[item.name].Exists | bool)
+                         else (svc_start_labels[svc_map[item.name].StartType]
+                               | default(svc_map[item.name].StartType, true)))
+             } ] }}
+      loop: "{{ target_services }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        svc_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': svc_rows } }}
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: svc_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: svc_record

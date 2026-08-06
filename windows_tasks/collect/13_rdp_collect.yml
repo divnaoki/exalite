@@ -1,20 +1,23 @@
 ---
 # =====================================================================
-# [収集] 13_リモートデスクトップ -> パラメータシート用の変数ファイル出力
+# [収集] (1) リモートデスクトップ -> パラメータシート用の変数ファイル出力
 #
 # 出力する変数名: collected_rdp__<ホスト名>
 # =====================================================================
-- name: "[収集] 13_リモートデスクトップ"
+- name: "[収集] (1) リモートデスクトップ"
   hosts: windows
   gather_facts: false
 
   vars_files:
+    - vars/sections.yml
     - ../vars/13_rdp.yml
 
   vars:
+    sec: "{{ param_sections.rdp }}"
+    sec_menu: "{{ param_section_menus.rdp | default(param_section_menu_default) }}"
+    var_key: "collected_rdp__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
     reg_ts: 'HKLM:\System\CurrentControlSet\Control\Terminal Server'
     reg_rdp: 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
-    var_key: "collected_rdp__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
 
   tasks:
     - name: "現在のリモートデスクトップ設定を取得"
@@ -34,17 +37,27 @@
 
     - name: "登録用レコードを作成"
       ansible.builtin.set_fact:
-        rdp_record:
-          host_name: "{{ inventory_hostname }}"
-          rdp_allow_connections: "{{ 'TRUE' if (cur.AllowConnections | bool) else 'FALSE' }}"
-          rdp_require_nla: "{{ 'TRUE' if (cur.RequireNLA | bool) else 'FALSE' }}"
-          rdp_firewall_enabled: "{{ 'TRUE' if (cur.FirewallEnabled | bool) else 'FALSE' }}"
+        rdp_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': [
+                 { 'key': (sec.prefix ~ '_allow_connections'),
+                   'item': 'リモートデスクトップ / このコンピューターへの接続を許可する',
+                   'value': ('TRUE' if (cur.AllowConnections | bool) else 'FALSE') },
+                 { 'key': (sec.prefix ~ '_require_nla'),
+                   'item': 'ネットワークレベル認証でリモートデスクトップを実行しているコンピューターからのみ接続を許可する（推奨）',
+                   'value': ('TRUE' if (cur.RequireNLA | bool) else 'FALSE') },
+                 { 'key': (sec.prefix ~ '_firewall_enabled'),
+                   'item': 'ファイアウォール規則（リモートデスクトップ）の有効',
+                   'value': ('TRUE' if (cur.FirewallEnabled | bool) else 'FALSE') }
+               ] } }}
       vars:
         cur: "{{ rdp_raw.stdout | from_json }}"
 
     - name: "変数ファイルを出力"
       ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/rdp_{{ inventory_hostname }}.yml"
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
         mode: '0644'
         content: "{{ { var_key: rdp_record } | to_nice_yaml }}"
       delegate_to: localhost

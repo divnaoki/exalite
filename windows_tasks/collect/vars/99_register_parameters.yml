@@ -14,10 +14,6 @@ exastro_base_url: "http://10.197.18.118"
 exastro_organization: "omca-kab"
 exastro_workspace: "omca-kab-dev1"
 
-# 登録先パラメータシートのメニュー ID
-# （画面 URL の /ita/menu/<ここ>/ の部分）
-exastro_menu: "check_parameter"
-
 # 認証
 exastro_user: "admin"
 exastro_password: ""     # ← ここには書かない。extra-vars / 機密パラメータで渡す
@@ -27,7 +23,29 @@ exastro_validate_certs: false
 
 # 登録時の type
 #   Register = 新規登録 / Update = 更新
+# ※ 同じホスト・同じ項目で Register を2回実行すると重複・一意制約エラーになる。
+#   オペレーションを分けて履歴として残す運用を想定している。
 exastro_record_type: "Register"
+
+# =====================================================================
+# オペレーション列
+#
+# パラメータシートを「ホスト/オペレーションあり」で作成した場合、
+# host_name に加えてオペレーションの指定が必要になる。
+#
+# Exastro から実行すると __operation__ に
+# 「<オペレーション名>_<UUID>:<日付>」形式で渡るため、
+# 参考実装と同じ正規表現でオペレーション名に戻している。
+#
+# シートを「ホスト/オペレーションなし」で作成した場合は
+# exastro_use_operation を false にする（列自体を送らない）。
+# =====================================================================
+exastro_use_operation: true
+exastro_operation_column: "operation_name_select"
+exastro_operation_value: "{{ __operation__ | default('') | regex_replace('_[0-9a-zA-Z-]{36}:', '_') }}"
+
+# ホスト名の列名（パラメータシートの「ホスト」列）
+exastro_host_column: "host_name"
 
 # 変数ファイルの置き場所。
 # Exastro の Conductor から実行する場合は __conductor_workflowdir__ が渡るため

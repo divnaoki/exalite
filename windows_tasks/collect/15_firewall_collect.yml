@@ -1,19 +1,22 @@
 ---
 # =====================================================================
-# [収集] 15_Windows ファイアウォール -> パラメータシート用の変数ファイル出力
+# [収集] (10) Windowsファイアウォール -> パラメータシート用の変数ファイル出力
 #
-# 出力する変数名: collected_fw__<ホスト名>
-# 値はパラメータシートと同じ表記（有効（推奨）/ ブロック（既定）等）で登録する。
+# 出力する変数名: collected_firewall__<ホスト名>
+# 値はパラメータシートと同じ表記（有効（推奨）/ ブロック（既定）等）にする。
 # =====================================================================
-- name: "[収集] 15_Windows ファイアウォール"
+- name: "[収集] (10) Windowsファイアウォール"
   hosts: windows
   gather_facts: false
 
   vars_files:
+    - vars/sections.yml
     - ../vars/15_firewall.yml
 
   vars:
-    var_key: "collected_fw__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    sec: "{{ param_sections.firewall }}"
+    sec_menu: "{{ param_section_menus.firewall | default(param_section_menu_default) }}"
+    var_key: "collected_firewall__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
     # 取得値 -> パラメータシートの表記
     fw_state_labels:
       "True": "有効（推奨）"
@@ -51,51 +54,64 @@
       changed_when: false
       register: fw_raw
 
-    - name: "取得結果を変数に格納"
+    - name: "取得結果を名前で引ける辞書に格納"
       ansible.builtin.set_fact:
-        fw_cur: "{{ fw_raw.stdout | from_json }}"
+        fw_cur_map: >-
+          {{ dict((fw_raw.stdout | from_json).Profiles | map(attribute='Name')
+             | zip((fw_raw.stdout | from_json).Profiles)) }}
+        fw_rule_map: >-
+          {{ dict((fw_raw.stdout | from_json).Rules | map(attribute='Name')
+             | zip((fw_raw.stdout | from_json).Rules)) }}
 
-    - name: "プロファイル名で引ける辞書を作成"
+    # プロファイル × 3項目 = 3レコード
+    - name: "項目を組み立て（プロファイル）"
       ansible.builtin.set_fact:
-        fw_cur_map: "{{ dict(fw_cur.Profiles | map(attribute='Name') | zip(fw_cur.Profiles)) }}"
-        fw_rule_map: "{{ dict(fw_cur.Rules | map(attribute='Name') | zip(fw_cur.Rules)) }}"
-
-    # プロファイル3種 × 3項目を、シートと同じ変数名で1レコードにまとめる
-    - name: "登録用レコードを作成（プロファイル）"
-      ansible.builtin.set_fact:
-        fw_record: >-
-          {{ fw_record | default({'host_name': inventory_hostname}) | combine({
-               ('fw_' ~ (item.name | lower) ~ '_enabled'):
-                 (fw_state_labels[(fw_cur_map[item.name].Enabled | string)] | default('不明', true)),
-               ('fw_' ~ (item.name | lower) ~ '_inbound'):
-                 (fw_action_labels[fw_cur_map[item.name].Inbound] | default(fw_cur_map[item.name].Inbound, true)),
-               ('fw_' ~ (item.name | lower) ~ '_outbound'):
-                 (fw_action_labels[fw_cur_map[item.name].Outbound] | default(fw_cur_map[item.name].Outbound, true))
-             }) }}
+        fw_rows: >-
+          {{ fw_rows | default([]) + [
+               { 'key': (sec.prefix ~ '_' ~ (item.name | lower) ~ '_enabled'),
+                 'item': (item.label ~ ' / 状態 / ファイアウォールの状態'),
+                 'value': (fw_state_labels[(cur.Enabled | string)] | default('不明', true)) },
+               { 'key': (sec.prefix ~ '_' ~ (item.name | lower) ~ '_inbound'),
+                 'item': (item.label ~ ' / 状態 / 受信接続'),
+                 'value': (fw_action_labels[cur.Inbound] | default(cur.Inbound, true)) },
+               { 'key': (sec.prefix ~ '_' ~ (item.name | lower) ~ '_outbound'),
+                 'item': (item.label ~ ' / 状態 / 送信接続'),
+                 'value': (fw_action_labels[cur.Outbound] | default(cur.Outbound, true)) } ] }}
+      vars:
+        cur: "{{ fw_cur_map[item.name] }}"
       loop: "{{ fw_profile_settings }}"
       loop_control:
         label: "{{ item.label }}"
 
-    # 受信の規則（存在しない場合は「存在しない」を登録して取りこぼしを残す）
-    - name: "登録用レコードを作成（受信の規則）"
+    # 受信の規則（存在しない場合は「存在しない」を残す）
+    - name: "項目を組み立て（受信の規則）"
       ansible.builtin.set_fact:
-        fw_record: >-
-          {{ fw_record | combine({
-               ('fw_rule_' ~ (item.name | lower | regex_replace('[^0-9a-z]', '_')) ~ '_enabled'):
-                 ('存在しない' if (item.name not in fw_rule_map)
-                  else ('TRUE' if (fw_rule_map[item.name].Enabled | bool) else 'FALSE')),
-               ('fw_rule_' ~ (item.name | lower | regex_replace('[^0-9a-z]', '_')) ~ '_profile'):
-                 ('存在しない' if (item.name not in fw_rule_map)
-                  else (fw_profile_labels[fw_rule_map[item.name].Profile]
-                        | default(fw_rule_map[item.name].Profile, true)))
-             }) }}
+        fw_rows: >-
+          {{ fw_rows + [
+               { 'key': (sec.prefix ~ '_rule_' ~ (item.name | lower | regex_replace('[^0-9a-z]', '_')) ~ '_enabled'),
+                 'item': ('受信の規則 / ' ~ item.label ~ ' / 有効'),
+                 'value': ('存在しない' if (item.name not in fw_rule_map)
+                           else ('TRUE' if (fw_rule_map[item.name].Enabled | bool) else 'FALSE')) },
+               { 'key': (sec.prefix ~ '_rule_' ~ (item.name | lower | regex_replace('[^0-9a-z]', '_')) ~ '_profile'),
+                 'item': ('受信の規則 / ' ~ item.label ~ ' / プロファイル'),
+                 'value': ('存在しない' if (item.name not in fw_rule_map)
+                           else (fw_profile_labels[fw_rule_map[item.name].Profile]
+                                 | default(fw_rule_map[item.name].Profile, true))) } ] }}
       loop: "{{ fw_rules }}"
       loop_control:
         label: "{{ item.label }}"
 
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        fw_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': fw_rows } }}
+
     - name: "変数ファイルを出力"
       ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/fw_{{ inventory_hostname }}.yml"
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
         mode: '0644'
         content: "{{ { var_key: fw_record } | to_nice_yaml }}"
       delegate_to: localhost

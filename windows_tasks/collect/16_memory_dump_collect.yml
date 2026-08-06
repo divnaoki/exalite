@@ -1,20 +1,23 @@
 ---
 # =====================================================================
-# [収集] 16_メモリダンプ設定 -> パラメータシート用の変数ファイル出力
+# [収集] (4) メモリダンプ -> パラメータシート用の変数ファイル出力
 #
 # 出力する変数名: collected_dump__<ホスト名>
 # 値はパラメータシートと同じ表記（例: カーネルダンプ）で登録する。
 # =====================================================================
-- name: "[収集] 16_メモリダンプ設定"
+- name: "[収集] (4) メモリダンプ"
   hosts: windows
   gather_facts: false
 
+  vars_files:
+    - vars/sections.yml
+
   vars:
-    reg_crash: 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl'
+    sec: "{{ param_sections.dump }}"
+    sec_menu: "{{ param_section_menus.dump | default(param_section_menu_default) }}"
     var_key: "collected_dump__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    reg_crash: 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl'
     # CrashDumpEnabled -> パラメータシートの表記
-    # （vars/16_memory_dump.yml の dump_type_labels は画面表示に合わせた表記のため、
-    #   シートに合わせた表記をここで別に持つ）
     dump_sheet_labels:
       0: "なし"
       1: "完全ダンプ"
@@ -29,6 +32,7 @@
         [ordered]@{
           CrashDumpEnabled = $(if ($null -eq $p.CrashDumpEnabled) { $null } else { [int]$p.CrashDumpEnabled })
           DumpFile         = $p.DumpFile
+          AutoReboot       = $(if ($null -eq $p.AutoReboot) { $null } else { [int]$p.AutoReboot })
         } | ConvertTo-Json -Compress
       args:
         executable: powershell
@@ -37,18 +41,27 @@
 
     - name: "登録用レコードを作成"
       ansible.builtin.set_fact:
-        dump_record:
-          host_name: "{{ inventory_hostname }}"
-          dump_write_debug_info: >-
-            {{ dump_sheet_labels[cur.CrashDumpEnabled | int]
-               | default('不明(' ~ (cur.CrashDumpEnabled | default('未設定', true)) ~ ')', true) }}
-          dump_file: "{{ cur.DumpFile | default('未設定', true) }}"
+        dump_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': [
+                 { 'key': (sec.prefix ~ '_write_debug_info'),
+                   'item': '起動と回復 / システムエラー / デバッグ情報の書き込み',
+                   'value': (dump_sheet_labels[cur.CrashDumpEnabled | int] | default('未設定', true)) },
+                 { 'key': (sec.prefix ~ '_dump_file'),
+                   'item': '起動と回復 / システムエラー / ダンプファイル',
+                   'value': (cur.DumpFile | default('未設定', true)) },
+                 { 'key': (sec.prefix ~ '_auto_reboot'),
+                   'item': '起動と回復 / システムエラー / 自動的に再起動する',
+                   'value': ('TRUE' if (cur.AutoReboot | int) == 1 else 'FALSE') }
+               ] } }}
       vars:
         cur: "{{ dump_raw.stdout | from_json }}"
 
     - name: "変数ファイルを出力"
       ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/dump_{{ inventory_hostname }}.yml"
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
         mode: '0644'
         content: "{{ { var_key: dump_record } | to_nice_yaml }}"
       delegate_to: localhost

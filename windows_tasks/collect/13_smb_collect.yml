@@ -1,0 +1,60 @@
+---
+# =====================================================================
+# [収集] (13) SMB3.0 マルチチャネルの無効化
+#        -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_smb__<ホスト名>
+# =====================================================================
+- name: "[収集] (13) SMB3.0 マルチチャネルの無効化"
+  hosts: windows
+  gather_facts: false
+
+  vars_files:
+    - vars/sections.yml
+
+  vars:
+    sec: "{{ param_sections.smb }}"
+    sec_menu: "{{ param_section_menus.smb | default(param_section_menu_default) }}"
+    var_key: "collected_smb__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    reg_lanman: 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
+
+  tasks:
+    - name: "現在の SMB サーバー設定を取得"
+      ansible.windows.win_shell: |
+        $c = Get-SmbServerConfiguration
+        # 実体のレジストリ値は EnableMultiChannel ではなく DisableMultiChannel（名前が反転）
+        $regVal = (Get-ItemProperty -Path '{{ reg_lanman }}' -Name DisableMultiChannel -EA SilentlyContinue).DisableMultiChannel
+        [ordered]@{
+          EnableMultiChannel      = [bool]$c.EnableMultiChannel
+          Raw_DisableMultiChannel = $(if ($null -eq $regVal) { $null } else { [int]$regVal })
+        } | ConvertTo-Json -Compress
+      args:
+        executable: powershell
+      changed_when: false
+      register: smb_raw
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        smb_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': [
+                 { 'key': (sec.prefix ~ '_enable_multichannel'),
+                   'item': 'SmbServerConfiguration / EnableMultiChannel',
+                   'value': ('TRUE' if (cur.EnableMultiChannel | bool) else 'FALSE') }
+               ] } }}
+      vars:
+        cur: "{{ smb_raw.stdout | from_json }}"
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: smb_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: smb_record

@@ -1,27 +1,28 @@
 ---
 # =====================================================================
-# [収集] 12_UAC設定 -> Exastro パラメータシート用の変数ファイル出力
+# [収集] (14) ソフトウェア制御（UAC） -> パラメータシート用の変数ファイル出力
 #
-# 現在の設定を取得し、Conductor の作業ディレクトリ
-# {{ __conductor_workflowdir__ }} に変数ファイルを出力する。
-# 出力したファイルは 99_register_parameters.yml が include_vars で
-# まとめて読み込み、パラメータシートへ登録する。
+# 出力ファイル: {{ __conductor_workflowdir__ }}/s14_uac_<ホスト名>.yml
+# 出力する変数名: collected_software__<ホスト名>
+#   { menu, host_name, section, parameters } の形で出力し、
+#   99_register_parameters.yml が menu × host_name でまとめて登録する。
 #
-# 出力する変数名: collected_uac__<ホスト名>
-#   （設定 × ホストで一意にし、include_vars 時の上書きを防ぐ）
-#
-# 値はパラメータシートと同じ表記（画面表示のラベル）で登録する。
+# 項目名は大項目のプレフィックス（vars/sections.yml）を付けて出力する。
+# 値はパラメータシートと同じ表記（画面表示のラベル）にする。
 # =====================================================================
-- name: "[収集] 12_UAC設定"
+- name: "[収集] (14) ソフトウェア制御（UAC）"
   hosts: windows
   gather_facts: false
 
   vars_files:
+    - vars/sections.yml
     - ../vars/12_uac.yml
 
   vars:
+    sec: "{{ param_sections.software }}"
+    sec_menu: "{{ param_section_menus.software | default(param_section_menu_default) }}"
+    var_key: "collected_software__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
     uac_reg_path: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-    var_key: "collected_uac__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
 
   tasks:
     - name: "現在の UAC 設定を取得"
@@ -42,26 +43,33 @@
       changed_when: false
       register: uac_raw
 
-    - name: "取得結果をシートの表記に変換"
-      ansible.builtin.set_fact:
-        uac_cur: "{{ uac_raw.stdout | from_json }}"
-
     - name: "登録用レコードを作成"
       ansible.builtin.set_fact:
-        uac_record:
-          host_name: "{{ inventory_hostname }}"
-          # スライダーの位置（対応表にない組み合わせのときはその旨を入れる）
-          uac_notification_setting: >-
-            {{ (uac_levels
-                | selectattr('consent_prompt_behavior_admin', 'eq', uac_cur.ConsentPromptBehaviorAdmin)
-                | selectattr('prompt_on_secure_desktop', 'eq', uac_cur.PromptOnSecureDesktop)
-                | list | first).label
-               | default('対応表にない組み合わせ (ConsentPromptBehaviorAdmin=' ~ uac_cur.ConsentPromptBehaviorAdmin
-                         ~ ', PromptOnSecureDesktop=' ~ uac_cur.PromptOnSecureDesktop ~ ')', true) }}
+        uac_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': [
+                 { 'key': (sec.prefix ~ '_notification_setting'),
+                   'item': 'ユーザーアカウントの設定 / コンピューターに対する変更の通知を受け取るタイミングの選択',
+                   'value': level },
+                 { 'key': (sec.prefix ~ '_enable_lua'),
+                   'item': 'ユーザーアカウント制御（UAC）の有効',
+                   'value': ('TRUE' if (cur.EnableLUA | int) == 1 else 'FALSE') }
+               ] } }}
+      vars:
+        cur: "{{ uac_raw.stdout | from_json }}"
+        # スライダーの位置（対応表にない組み合わせのときはその旨を入れる）
+        level: >-
+          {{ (uac_levels
+              | selectattr('consent_prompt_behavior_admin', 'eq', (uac_raw.stdout | from_json).ConsentPromptBehaviorAdmin)
+              | selectattr('prompt_on_secure_desktop', 'eq', (uac_raw.stdout | from_json).PromptOnSecureDesktop)
+              | list | first).label
+             | default('対応表にない組み合わせ', true) }}
 
     - name: "変数ファイルを出力"
       ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/uac_{{ inventory_hostname }}.yml"
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
         mode: '0644'
         content: "{{ { var_key: uac_record } | to_nice_yaml }}"
       delegate_to: localhost

@@ -1,17 +1,22 @@
 ---
 # =====================================================================
-# [収集] 14_時刻同期 -> パラメータシート用の変数ファイル出力
+# [収集] (7) NTPサーバの設定 -> パラメータシート用の変数ファイル出力
 #
 # 出力する変数名: collected_ntp__<ホスト名>
 # =====================================================================
-- name: "[収集] 14_時刻同期"
+- name: "[収集] (7) NTPサーバの設定"
   hosts: windows
   gather_facts: false
 
+  vars_files:
+    - vars/sections.yml
+
   vars:
+    sec: "{{ param_sections.ntp }}"
+    sec_menu: "{{ param_section_menus.ntp | default(param_section_menu_default) }}"
+    var_key: "collected_ntp__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
     reg_w32_param: 'HKLM:\SYSTEM\CurrentControlSet\Services\W32Time\Parameters'
     reg_dt_servers: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\DateTime\Servers'
-    var_key: "collected_ntp__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
 
   tasks:
     - name: "現在の時刻同期設定を取得"
@@ -33,20 +38,30 @@
 
     - name: "登録用レコードを作成"
       ansible.builtin.set_fact:
-        ntp_record:
-          host_name: "{{ inventory_hostname }}"
-          ntp_sync_enabled: "{{ 'TRUE' if (cur.Type == 'NTP') else 'FALSE' }}"
-          # GUI のサーバー欄に表示される値（シートの「サーバー」に対応）
-          ntp_server: "{{ cur.GuiServer | default('未設定', true) }}"
-          # 実体のレジストリ値（フラグ付き）と実際の同期元
-          ntp_server_raw: "{{ cur.NtpServer | default('未設定', true) }}"
-          ntp_source: "{{ cur.Source | default('', true) | trim }}"
+        ntp_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
+               'rows': [
+                 { 'key': (sec.prefix ~ '_sync_enabled'),
+                   'item': 'インターネット時刻設定 / インターネット時刻サーバーと同期する',
+                   'value': ('TRUE' if (cur.Type == 'NTP') else 'FALSE') },
+                 { 'key': (sec.prefix ~ '_server'),
+                   'item': 'インターネット時刻設定 / サーバー',
+                   'value': (cur.GuiServer | default('未設定', true)) },
+                 { 'key': (sec.prefix ~ '_server_raw'),
+                   'item': 'NtpServer（レジストリ値）',
+                   'value': (cur.NtpServer | default('未設定', true)) },
+                 { 'key': (sec.prefix ~ '_source'),
+                   'item': '実際の同期元',
+                   'value': (cur.Source | default('', true) | trim) }
+               ] } }}
       vars:
         cur: "{{ ntp_raw.stdout | from_json }}"
 
     - name: "変数ファイルを出力"
       ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/ntp_{{ inventory_hostname }}.yml"
+        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
         mode: '0644'
         content: "{{ { var_key: ntp_record } | to_nice_yaml }}"
       delegate_to: localhost
