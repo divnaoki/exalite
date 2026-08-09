@@ -1,4 +1,0 @@
-PyYAML>=5.1
-
-[web]
-Flask>=2.0

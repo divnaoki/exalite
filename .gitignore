@@ -1,0 +1,38 @@
+# exalite リポジトリの除外設定。
+# サブプロジェクト（setup_linux_os/ examples/demo/ testproject/）にも効くよう、
+# パターンは **/ を付けて階層を問わず一致させる。
+
+# ---- 実行時の生成物 ----
+**/.exalite/
+
+# ---- 検証環境の接続情報・鍵（環境ごとに生成されるもの。絶対にコミットしない）----
+# SSH 鍵（exalite env up が生成）
+**/environments/.ssh/
+# 旧構成の鍵置き場
+**/environments/verify/ssh/
+# 検証コンテナ用インベントリ（exalite env up が自動生成）
+**/environments/verify/linux.ini
+# Windows 検証機の接続情報（パスワード等を含みうる）
+**/environments/verify/windows.ini
+# 旧構成の単一ファイルインベントリ
+**/environments/verify.ini
+
+# ---- 鍵ファイル全般（取りこぼし防止）----
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# ---- OS ----
+.DS_Store

@@ -106,6 +106,9 @@ EXPOSE 22
 # 9-init の CMD (/sbin/init = systemd) をそのまま使うため CMD は上書きしない。
 """
 
+# 鍵のパスは絶対パスで書かない（環境ごとに変わり、共有もできないため）。
+# inventory_dir は このファイルが置かれた environments/verify を指すので、
+# そこからの相対で environments/.ssh/verify/id_ed25519 を解決する。
 _VERIFY_INI_TEMPLATE = """\
 # exalite env up により自動生成。検証用 Docker コンテナ(systemd 稼働)を指す。
 # このファイルは再生成されるため手で編集しない（Windows 側は windows.ini）。
@@ -114,7 +117,7 @@ verify-linux ansible_host=127.0.0.1 ansible_port=2222
 
 [linux:vars]
 ansible_user=ansible
-ansible_ssh_private_key_file={key_path}
+ansible_ssh_private_key_file={{ inventory_dir }}/../.ssh/verify/id_ed25519
 ansible_python_interpreter=/usr/bin/python3
 ansible_ssh_common_args=-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
 """
@@ -234,12 +237,15 @@ def _read_pubkey(key_path: str) -> str:
         return fh.read().strip()
 
 
-def write_verify_inventory(base_dir: str, key_path: str) -> str:
-    """検証コンテナ用の linux.ini を（再）生成する。"""
+def write_verify_inventory(base_dir: str) -> str:
+    """検証コンテナ用の linux.ini を（再）生成する。
+
+    鍵のパスは inventory_dir 起点の相対で書くため、絶対パスは埋め込まない。
+    """
     path = os.path.join(base_dir, _VERIFY_INI_REL)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(_VERIFY_INI_TEMPLATE.format(key_path=os.path.abspath(key_path)))
+        fh.write(_VERIFY_INI_TEMPLATE)
     return path
 
 
@@ -353,7 +359,7 @@ def up(base_dir: str, *, wait: bool = True) -> str:
     ensure_docker_assets(base_dir)
     key_path = ensure_keypair(base_dir)
     pubkey = _read_pubkey(key_path)
-    inv = write_verify_inventory(base_dir, key_path)
+    inv = write_verify_inventory(base_dir)
     ensure_windows_inventory(base_dir)
 
     env = _build_env(base_dir, pubkey)
