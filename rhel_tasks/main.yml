@@ -1,0 +1,23 @@
+---
+# =====================================================================
+# RHEL / AlmaLinux 初期設定をまとめて実行する
+#
+# 個別に実行する場合は各 Playbook を直接指定する。
+# Exastro からは 1 Movement = 1 Playbook で登録するため、通常はこの main.yml
+# ではなく個別の Playbook を Movement に紐付ける。
+#
+# 【実行順の意味】
+#   02（chrony 導入・起動）を 04（同期先設定）より先に実行する。
+#   chrony が未導入の状態で 04 を実行すると chrony.conf が無く中止になるため。
+# =====================================================================
+- name: "01_IPv6 無効化"
+  ansible.builtin.import_playbook: 01_ipv6_disable.yml
+
+- name: "02_サービス起動設定"
+  ansible.builtin.import_playbook: 02_service_startup.yml
+
+- name: "03_管理者権限ユーザー作成"
+  ansible.builtin.import_playbook: 03_admin_user.yml
+
+- name: "04_時刻同期設定"
+  ansible.builtin.import_playbook: 04_time_sync.yml

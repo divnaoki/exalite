@@ -1,0 +1,140 @@
+---
+# =====================================================================
+# [収集] (3) 管理者権限ユーザー -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_user__<ホスト名>
+# 対象ユーザーは設定側と同じ vars/03_admin_user.yml を読む。
+# 設定は変更せず、現在値の取得のみを行う。パスワードは一切出力しない。
+# =====================================================================
+- name: "[収集] (3) 管理者権限ユーザー"
+  hosts: linux
+  gather_facts: false
+  become: true
+
+  vars_files:
+    - vars/sections.yml
+    - ../vars/03_admin_user.yml
+
+  vars:
+    sec: "{{ param_sections.user }}"
+    sec_menu: "{{ param_section_menus.user | default(param_section_menu_default) }}"
+    var_key: "collected_user__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+
+  tasks:
+    - name: "出力先ディレクトリを作成"
+      ansible.builtin.file:
+        path: "{{ collect_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+
+    # 「ユーザー名:存在(1/0):UID:シェル:ホーム:所属グループ:パスワード状態」の形で返す。
+    # パスワード状態は passwd -S の2列目（PS=設定済 / LK=ロック / NP=未設定）で、
+    # パスワードそのものやハッシュは取得しない。
+    - name: "対象ユーザーの現在状態を取得"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          for n in {{ admin_users | map(attribute='name') | join(' ') }}; do
+            if id "$n" >/dev/null 2>&1; then
+              printf '%s:1:%s:%s:%s:%s:%s\n' "$n" \
+                "$(id -u "$n")" \
+                "$(getent passwd "$n" | cut -d: -f7)" \
+                "$(getent passwd "$n" | cut -d: -f6)" \
+                "$(id -nG "$n" | tr ' ' ',')" \
+                "$(passwd -S "$n" 2>/dev/null | awk '{print $2}')"
+            else
+              printf '%s:0:::::\n' "$n"
+            fi
+          done
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      register: user_raw
+
+    - name: "取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        users_cur: >-
+          {{ users_cur | default({}) | combine({
+               (item.split(':')[0]): {
+                 'exists': (item.split(':')[1] == '1'),
+                 'uid': item.split(':')[2],
+                 'shell': item.split(':')[3],
+                 'home': item.split(':')[4],
+                 'groups': item.split(':')[5],
+                 'password_status': item.split(':')[6] } }) }}
+      loop: "{{ user_raw.stdout_lines }}"
+      loop_control:
+        label: "{{ item.split(':')[0] }}"
+
+    - name: "sudo 権限を取得 (sudo -l)"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          sudo -l -U "{{ item.name }}" 2>/dev/null | grep -E '^[[:space:]]*\(' | tr '\n' ' '
+        executable: /bin/bash
+      loop: "{{ admin_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: sudo_raw
+
+    - name: "ユーザーごとにレコード化"
+      ansible.builtin.set_fact:
+        user_rows: >-
+          {{ user_rows | default([]) + [
+               { 'key': (key_base ~ '_exists'),
+                 'item': (item.name ~ ' / アカウントの有無'),
+                 'value': ('TRUE' if users_cur[item.name].exists else 'FALSE') },
+               { 'key': (key_base ~ '_uid'),
+                 'item': (item.name ~ ' / UID'),
+                 'value': (users_cur[item.name].uid | default('-', true)) },
+               { 'key': (key_base ~ '_groups'),
+                 'item': (item.name ~ ' / 所属グループ'),
+                 'value': (users_cur[item.name].groups | default('-', true)) },
+               { 'key': (key_base ~ '_shell'),
+                 'item': (item.name ~ ' / ログインシェル'),
+                 'value': (users_cur[item.name].shell | default('-', true)) },
+               { 'key': (key_base ~ '_home'),
+                 'item': (item.name ~ ' / ホームディレクトリ'),
+                 'value': (users_cur[item.name].home | default('-', true)) },
+               { 'key': (key_base ~ '_password'),
+                 'item': (item.name ~ ' / パスワード状態 (PS=設定済 LK=ロック NP=未設定)'),
+                 'value': (users_cur[item.name].password_status | default('-', true)) },
+               { 'key': (key_base ~ '_sudo'),
+                 'item': (item.name ~ ' / sudo 権限'),
+                 'value': (sudo_line | default('(なし)', true)) } ] }}
+      loop: "{{ admin_users }}"
+      loop_control:
+        label: "{{ item.name }}"
+      vars:
+        key_base: "{{ sec.prefix ~ '_' ~ (item.name | regex_replace('[^0-9a-zA-Z_]', '_')) }}"
+        sudo_line: >-
+          {{ (sudo_raw.results | selectattr('item.name', 'eq', item.name)
+              | map(attribute='stdout') | first | default('', true)) | trim }}
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        user_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.num ~ ') ' ~ sec.name),
+               'rows': (user_rows | default([])) } }}
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ collect_dir }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: user_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: user_record

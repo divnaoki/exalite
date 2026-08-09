@@ -1,0 +1,123 @@
+---
+# =====================================================================
+# 01_IPv6 無効化
+#
+#   PHASE 1  変更前の設定情報を取得
+#   PHASE 2  現在値が disabled でない場合のみ変更（冪等）
+#   PHASE 3  変更後の設定情報を取得して確認
+#
+# 接続単位（nmcli の ipv6.method disabled）で無効化し、down -> up で反映する。
+# 設定値は vars/01_ipv6_disable.yml で定義。
+# =====================================================================
+- name: "01_IPv6 無効化"
+  hosts: linux
+  gather_facts: false
+  become: true
+
+  vars_files:
+    - vars/01_ipv6_disable.yml
+
+  tasks:
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得
+    # =================================================================
+    - name: "[BEFORE] 接続ごとの ipv6.method を取得"
+      ansible.builtin.command:
+        cmd: "nmcli -g ipv6.method connection show {{ item }}"
+      loop: "{{ ipv6_connections }}"
+      changed_when: false
+      check_mode: false
+      register: ipv6_method_before_raw
+
+    - name: "[BEFORE] IPv6 アドレス数を取得"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ip -6 -o addr show scope global 2>/dev/null | wc -l
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      register: ipv6_addr_before
+
+    - name: "[BEFORE] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        ipv6_before: >-
+          {{ dict(ipv6_connections
+                  | zip(ipv6_method_before_raw.results | map(attribute='stdout') | map('trim'))) }}
+
+    - name: "[BEFORE] 現在設定と指定値を表示"
+      ansible.builtin.debug:
+        msg:
+          - "ipv6.method     : {{ ipv6_before }} -> disabled"
+          - "IPv6 アドレス数 : {{ ipv6_addr_before.stdout | trim }}"
+
+    # =================================================================
+    # PHASE 2: 変更（現在値が disabled でない場合のみ実行）
+    # =================================================================
+    - name: "ipv6.method を disabled に変更"
+      ansible.builtin.command:
+        cmd: "nmcli connection modify {{ item }} ipv6.method disabled"
+      loop: "{{ ipv6_connections }}"
+      when: ipv6_before[item] != 'disabled'
+
+    # down で自分自身の接続が切れるため、down と up を1コマンドにまとめ
+    # async + poll:0 で投げっぱなしにする。IPv4 は変更しないので同じ IP で戻る。
+    - name: "接続を down -> up して反映"
+      ansible.builtin.shell:
+        cmd: "nmcli connection down {{ item }}; nmcli connection up {{ item }}"
+      loop: "{{ ipv6_connections }}"
+      when: ipv6_before[item] != 'disabled'
+      async: 60
+      poll: 0
+      changed_when: true
+
+    - name: "接続の復帰を待機"
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 120
+      when: (ipv6_before.values() | reject('equalto', 'disabled') | list | length) > 0
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を取得（確認）
+    # =================================================================
+    - name: "[AFTER] 接続ごとの ipv6.method を再取得"
+      ansible.builtin.command:
+        cmd: "nmcli -g ipv6.method connection show {{ item }}"
+      loop: "{{ ipv6_connections }}"
+      changed_when: false
+      check_mode: false
+      register: ipv6_method_after_raw
+
+    - name: "[AFTER] IPv6 アドレス数を再取得"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ip -6 -o addr show scope global 2>/dev/null | wc -l
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      register: ipv6_addr_after
+
+    - name: "[AFTER] 取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        ipv6_after: >-
+          {{ dict(ipv6_connections
+                  | zip(ipv6_method_after_raw.results | map(attribute='stdout') | map('trim'))) }}
+
+    - name: "[AFTER] 変更後の設定を表示"
+      ansible.builtin.debug:
+        msg:
+          - "ipv6.method     : {{ ipv6_after }}"
+          - "IPv6 アドレス数 : {{ ipv6_addr_after.stdout | trim }}"
+
+    - name: "[AFTER] 設定値が反映されたことを確認"
+      ansible.builtin.assert:
+        that:
+          - (ipv6_after.values() | reject('equalto', 'disabled') | list | length) == 0
+          - (ipv6_addr_after.stdout | trim | int) == 0
+        success_msg: "IPv6 を無効化しました ({{ ipv6_after }})。"
+        fail_msg: >-
+          設定値が一致しません (実際={{ ipv6_after }} /
+          IPv6 アドレス数={{ ipv6_addr_after.stdout | trim }} / 期待: disabled かつ 0)。
+      # check モード（dryrun）では変更が行われないため確認はスキップする
+      when: not ansible_check_mode

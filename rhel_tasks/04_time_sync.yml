@@ -1,0 +1,158 @@
+---
+# =====================================================================
+# 04_時刻同期設定（chrony）
+#
+#   PHASE 1  変更前の設定情報を取得（同期先 / 同期状態）
+#   PHASE 2  現在値と異なる場合のみ変更（冪等）
+#   PHASE 3  変更後の設定情報を取得して確認
+#
+# 変更は2段階。
+#   (1) 指定サーバー以外の server/pool 行をコメントアウト
+#   (2) 指定サーバーを ANSIBLE MANAGED BLOCK として追記
+# コメント済みの行は対象外なので、再実行しても設定は増殖しない。
+#
+# サービス再起動は handler ではなくタスクで行う（handler は play の最後に実行され、
+# PHASE 3 が再起動前の状態を見てしまうため）。
+# 設定値は vars/04_time_sync.yml で定義。
+# =====================================================================
+- name: "04_時刻同期設定（chrony）"
+  hosts: linux
+  gather_facts: false
+  become: true
+
+  vars_files:
+    - vars/04_time_sync.yml
+
+  vars:
+    # 指定サーバー以外の server/pool 行を判定するための正規表現
+    ntp_target_re: "{{ ntp_servers | map('regex_escape') | join('|') }}"
+    ntp_desired: "{{ ntp_servers | sort }}"
+
+  tasks:
+    # =================================================================
+    # PHASE 1: 変更前の設定情報を取得
+    # =================================================================
+    - name: "[BEFORE] chrony.conf を取得"
+      ansible.builtin.slurp:
+        src: "{{ chrony_conf }}"
+      register: chrony_conf_before_raw
+
+    # コメントアウトされていない server / pool 行からアドレスだけを取り出す。
+    - name: "[BEFORE] 設定済みの同期先を変数に格納"
+      ansible.builtin.set_fact:
+        ntp_before_servers: >-
+          {{ (chrony_conf_before_raw.content | b64decode).splitlines()
+             | select('match', '^\s*(server|pool)\s+\S+')
+             | map('regex_replace', '^\s*(?:server|pool)\s+(\S+).*$', '\1')
+             | list | sort }}
+
+    - name: "[BEFORE] 同期状態を取得"
+      ansible.builtin.shell:
+        cmd: |
+          chronyc tracking 2>/dev/null | grep -E '^(Reference ID|Stratum)'
+          timedatectl show -p NTPSynchronized --value 2>/dev/null
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: ntp_status_before
+
+    - name: "[BEFORE] 現在設定と指定値を表示"
+      ansible.builtin.debug:
+        msg:
+          - "同期先   : {{ ntp_before_servers | join(', ') | default('未設定', true) }} -> {{ ntp_desired | join(', ') }}"
+          - "同期状態 : {{ ntp_status_before.stdout_lines | default([]) }}"
+
+    # =================================================================
+    # PHASE 2: 変更（現在値と異なる場合のみ実行）
+    # =================================================================
+    # 既定の pool（例: pool 2.almalinux.pool.ntp.org iburst）が残っていると
+    # 指定サーバー以外とも同期してしまうため、対象以外を無効化する。
+    - name: "指定サーバー以外の同期先を無効化"
+      ansible.builtin.replace:
+        path: "{{ chrony_conf }}"
+        regexp: '^(?!\s*#)(\s*(?:server|pool)\s+(?!(?:{{ ntp_target_re }})\b)\S+.*)$'
+        replace: '# \1'
+      when: ntp_before_servers != ntp_desired
+      register: ntp_conf_cleaned
+
+    - name: "指定サーバーを設定"
+      ansible.builtin.blockinfile:
+        path: "{{ chrony_conf }}"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK (04_時刻同期設定)"
+        block: |
+          {% for s in ntp_servers %}
+          server {{ s }} {{ ntp_server_options }}
+          {% endfor %}
+      when: ntp_before_servers != ntp_desired
+      register: ntp_conf_block
+
+    # chronyd は設定ファイルを起動時にしか読まないため、変更したら再起動する。
+    - name: "chronyd を再起動し時刻を即時補正"
+      ansible.builtin.shell:
+        cmd: |
+          systemctl restart {{ chrony_service }}
+          chronyc -a makestep
+      when: (ntp_conf_cleaned is changed) or (ntp_conf_block is changed)
+      changed_when: true
+      # 同期先へ到達できないと makestep は失敗しうるが、設定は完了しているため
+      # Playbook は失敗させず結果だけ表示する。
+      failed_when: false
+      register: ntp_restart
+
+    - name: "[CHECK] 再起動・即時補正の結果を表示"
+      ansible.builtin.debug:
+        msg: "{{ (ntp_restart.stdout | default('')) ~ (ntp_restart.stderr | default('')) | trim }}"
+      when: ntp_restart is not skipped
+
+    # =================================================================
+    # PHASE 3: 変更後の設定情報を取得（確認）
+    # =================================================================
+    - name: "[AFTER] chrony.conf を再取得"
+      ansible.builtin.slurp:
+        src: "{{ chrony_conf }}"
+      register: chrony_conf_after_raw
+
+    - name: "[AFTER] 設定済みの同期先を変数に格納"
+      ansible.builtin.set_fact:
+        ntp_after_servers: >-
+          {{ (chrony_conf_after_raw.content | b64decode).splitlines()
+             | select('match', '^\s*(server|pool)\s+\S+')
+             | map('regex_replace', '^\s*(?:server|pool)\s+(\S+).*$', '\1')
+             | list | sort }}
+
+    - name: "[AFTER] 同期状態を再取得"
+      ansible.builtin.shell:
+        cmd: |
+          chronyc -n sources 2>/dev/null
+          chronyc tracking 2>/dev/null | grep -E '^(Reference ID|Stratum)'
+          timedatectl show -p NTPSynchronized --value 2>/dev/null
+          date '+%Y-%m-%d %H:%M:%S %Z'
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: ntp_status_after
+
+    - name: "[AFTER] 変更後の設定を表示"
+      ansible.builtin.debug:
+        msg:
+          - "同期先   : {{ ntp_after_servers | join(', ') | default('(なし)', true) }}"
+          - "{{ ntp_status_after.stdout_lines | default([]) }}"
+
+    # 設定が反映されたことのみを確認する。実際に同期完了するまでには時間がかかり、
+    # 同期先へ到達できない場合は永久に完了しないため assert には含めない。
+    - name: "[AFTER] 設定値が反映されたことを確認"
+      ansible.builtin.assert:
+        that:
+          - ntp_after_servers == ntp_desired
+        success_msg: "時刻同期の同期先が {{ ntp_after_servers | join(', ') }} になりました。"
+        fail_msg: "設定値が一致しません (実際={{ ntp_after_servers }} / 期待={{ ntp_desired }})。"
+      # check モード（dryrun）では変更が行われないため確認はスキップする
+      when: not ansible_check_mode
+
+    - name: "[AFTER] 同期が完了していない場合の注意を表示"
+      ansible.builtin.debug:
+        msg: >-
+          設定は反映されましたが、まだ時刻同期は完了していません。
+          同期先 {{ ntp_servers | join(', ') }} へ到達できるか、UDP/123 が開いているかを
+          確認してください。
+      when: "'yes' not in (ntp_status_after.stdout_lines | default([]))"

@@ -1,0 +1,121 @@
+---
+# =====================================================================
+# [収集] (4) 時刻同期設定 -> パラメータシート用の変数ファイル出力
+#
+# 出力する変数名: collected_ntp__<ホスト名>
+# 設定は変更せず、現在値の取得のみを行う。
+# =====================================================================
+- name: "[収集] (4) 時刻同期設定"
+  hosts: linux
+  gather_facts: false
+  become: true
+
+  vars_files:
+    - vars/sections.yml
+    - ../vars/04_time_sync.yml
+
+  vars:
+    sec: "{{ param_sections.ntp }}"
+    sec_menu: "{{ param_section_menus.ntp | default(param_section_menu_default) }}"
+    var_key: "collected_ntp__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+
+  tasks:
+    - name: "出力先ディレクトリを作成"
+      ansible.builtin.file:
+        path: "{{ collect_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+
+    - name: "chrony.conf の有無を確認"
+      ansible.builtin.stat:
+        path: "{{ chrony_conf }}"
+      register: chrony_conf_stat
+
+    - name: "chrony.conf を取得"
+      ansible.builtin.slurp:
+        src: "{{ chrony_conf }}"
+      register: chrony_conf_raw
+      when: chrony_conf_stat.stat.exists
+
+    # コメントアウトされていない server / pool 行からアドレスだけを取り出す。
+    - name: "設定済みの同期先を変数に格納"
+      ansible.builtin.set_fact:
+        ntp_conf_servers: >-
+          {{ ((chrony_conf_raw.content | default('') | b64decode).splitlines()
+              | select('match', '^\s*(server|pool)\s+\S+')
+              | map('regex_replace', '^\s*(?:server|pool)\s+(\S+).*$', '\1')
+              | list | sort) if chrony_conf_stat.stat.exists else [] }}
+
+    - name: "同期状態を取得"
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ref=$(chronyc tracking 2>/dev/null | awk -F': *' '/^Reference ID/{print $2}')
+          st=$(chronyc tracking 2>/dev/null | awk -F': *' '/^Stratum/{print $2}')
+          off=$(chronyc tracking 2>/dev/null | awk -F': *' '/^System time/{print $2}')
+          sync=$(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo "unknown")
+          tz=$(timedatectl show -p Timezone --value 2>/dev/null || echo "unknown")
+          svc=$(systemctl is-active {{ chrony_service }} 2>/dev/null || echo "inactive")
+          printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$ref" "$st" "$off" "$sync" "$tz" "$svc"
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: ntp_status_raw
+
+    - name: "取得結果を変数に格納"
+      ansible.builtin.set_fact:
+        ntp_cur:
+          reference: "{{ ntp_status_raw.stdout_lines[0] | default('', true) | trim }}"
+          stratum: "{{ ntp_status_raw.stdout_lines[1] | default('', true) | trim }}"
+          offset: "{{ ntp_status_raw.stdout_lines[2] | default('', true) | trim }}"
+          synchronized: "{{ ntp_status_raw.stdout_lines[3] | default('unknown', true) | trim }}"
+          timezone: "{{ ntp_status_raw.stdout_lines[4] | default('unknown', true) | trim }}"
+          service: "{{ ntp_status_raw.stdout_lines[5] | default('inactive', true) | trim }}"
+
+    - name: "登録用レコードを作成"
+      ansible.builtin.set_fact:
+        ntp_record: >-
+          {{ { 'menu': sec_menu,
+               'host_name': inventory_hostname,
+               'section': ('(' ~ sec.num ~ ') ' ~ sec.name),
+               'rows': [
+                 { 'key': (sec.prefix ~ '_sync_enabled'),
+                   'item': '時刻同期 / 同期先の設定有無',
+                   'value': ('TRUE' if ((ntp_conf_servers | length) > 0) else 'FALSE') },
+                 { 'key': (sec.prefix ~ '_servers'),
+                   'item': ('NTPサーバ（' ~ chrony_conf ~ ' の server/pool 行）'),
+                   'value': (ntp_conf_servers | join(', ') | default('未設定', true)) },
+                 { 'key': (sec.prefix ~ '_service'),
+                   'item': (chrony_service ~ ' の稼働状態'),
+                   'value': (ntp_cur.service | default('-', true)) },
+                 { 'key': (sec.prefix ~ '_synchronized'),
+                   'item': '同期完了 (timedatectl NTPSynchronized)',
+                   'value': (ntp_cur.synchronized | default('unknown', true)) },
+                 { 'key': (sec.prefix ~ '_reference'),
+                   'item': '実際の同期元 (Reference ID)',
+                   'value': (ntp_cur.reference | default('-', true)) },
+                 { 'key': (sec.prefix ~ '_stratum'),
+                   'item': 'Stratum',
+                   'value': (ntp_cur.stratum | default('-', true)) },
+                 { 'key': (sec.prefix ~ '_timezone'),
+                   'item': 'タイムゾーン',
+                   'value': (ntp_cur.timezone | default('-', true)) }
+               ] } }}
+
+    - name: "変数ファイルを出力"
+      ansible.builtin.copy:
+        dest: "{{ collect_dir }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+        mode: '0644'
+        content: "{{ { var_key: ntp_record } | to_nice_yaml }}"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: "出力内容を表示"
+      ansible.builtin.debug:
+        var: ntp_record
