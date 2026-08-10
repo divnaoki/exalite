@@ -16,11 +16,18 @@
 {{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/<大項目名>
 ```
 
-出力されるファイルの中身は 1 行だけ。
+出力されるファイルの中身は変数1つだけ。値は**改行とインデント付きの JSON 文字列**で、
+そのままパラメータシートのセルに入っても読める形にしている。
 
 ```yaml
 # BEGIN ANSIBLE MANAGED BLOCK
-memory_dump_info: "{'crash_dump_enabled': 2, 'crash_dump_type': 'カーネルダンプ', ...}"
+memory_dump_info: |
+  {
+    "crash_dump_enabled": 2,
+    "crash_dump_type": "カーネルダンプ",
+    "dump_file": "C:\\Windows\\MEMORY.DMP",
+    "auto_reboot": true
+  }
 # END ANSIBLE MANAGED BLOCK
 ```
 
@@ -90,9 +97,20 @@ memory_dump_info: "{'crash_dump_enabled': 2, 'crash_dump_type': 'カーネルダ
         mode: '0644'
         dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/<大項目名>"
         block: |
-          <大項目名>_info: {{ xxx_raw | trim | to_json(ensure_ascii=False) }}
+          <大項目名>_info: |
+            {{ xxx_raw | to_nice_json(indent=2, sort_keys=False, ensure_ascii=False) | indent(2) }}
       delegate_to: localhost
 ```
+
+`block` 内の書き方には意味がある。
+
+| 書き方 | 理由 |
+|---|---|
+| `<大項目名>_info: \|` | 値を**文字列**にする。構造（辞書）のまま渡すと、登録時に再度1行へ潰れて読めなくなる |
+| `to_nice_json(indent=2)` | 改行とインデントを入れる |
+| `sort_keys=False` | キーをアルファベット順に並べ替えず、Playbook で組み立てた論理順のまま出す |
+| `ensure_ascii=False` | 日本語を `\uXXXX` にエスケープさせない |
+| `\| indent(2)` | 2行目以降にも 2 スペースを付ける。付けないとブロックスカラーとして成立しない |
 
 ### 値の持ち方
 
@@ -106,10 +124,10 @@ memory_dump_info: "{'crash_dump_enabled': 2, 'crash_dump_type': 'カーネルダ
 
 - `dest` の親ディレクトリ（ホスト名のディレクトリ）は事前に存在している必要がある。
   `blockinfile` はファイルは作るがディレクトリは作らない
-- `block` の `{{ xxx_raw | trim | ... }}` の `trim` は文字列フィルタのため、
-  辞書に適用すると Python の repr 文字列に変換されてから JSON 化される。
-  そのため出力は「JSON 文字列」であって JSON そのものではない
-  （構造として読み直したい場合は `| trim` を外す）
+- 出力される値は「改行入りの JSON 文字列」。登録側で
+  `some_var: "{{ xxx_info }}"` のように**単独のテンプレートとして参照すると、
+  Ansible が辞書へ変換し直してしまい改行が失われる**。
+  文字列のまま扱いたい場合は `{{ xxx_info | string }}` と書くこと
 - PS5.1 の `ConvertFrom-Json` は配列を1個のオブジェクトとしてパイプへ流すため、
   `@('...' | ConvertFrom-Json)` と書くと要素数が常に 1 になる。
   一度変数へ受けてから `@()` で配列化すること

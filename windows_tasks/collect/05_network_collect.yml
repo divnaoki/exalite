@@ -181,5 +181,6 @@
         mode: '0644'
         dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/network"
         block: |
-          network_info: {{ netadapter_raw | trim | to_json(ensure_ascii=False) }}
+          network_info: |
+            {{ netadapter_raw | to_nice_json(indent=2, sort_keys=False, ensure_ascii=False) | indent(2) }}
       delegate_to: localhost

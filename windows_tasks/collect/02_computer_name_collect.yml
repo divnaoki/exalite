@@ -48,5 +48,6 @@
         mode: '0644'
         dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/computer_name"
         block: |
-          computer_name_info: {{ computer_raw | trim | to_json(ensure_ascii=False) }}
+          computer_name_info: |
+            {{ computer_raw | to_nice_json(indent=2, sort_keys=False, ensure_ascii=False) | indent(2) }}
       delegate_to: localhost
