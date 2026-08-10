@@ -34,7 +34,7 @@ Exastro ITA の「メニュー作成」でパラメータシートを1つ作る�
 | (2) | コンピューター名 | `s02_computer` | `02_computer_name_collect.yml` |
 | (3) | パフォーマンス | `s03_performance` | 未対応 |
 | (4) | メモリダンプ | `s04_dump` | `16_memory_dump_collect.yml` |
-| (5) | ネットワークアダプター | `s05_netadapter` | 未対応 |
+| (5) | ネットワークアダプター | `s05_netadapter` | `05_network_collect.yml` |
 | (6) | コンピューターの管理 | `s06_computermgmt` | `11_local_users_collect.yml` |
 | (7) | NTPサーバの設定 | `s07_ntp` | `14_time_sync_collect.yml` |
 | (8) | 役割と機能 | `s08_feature` | `10_server_features_collect.yml` |
@@ -47,6 +47,11 @@ Exastro ITA の「メニュー作成」でパラメータシートを1つ作る�
 | (15) | イベントログ | `s15_eventlog` | 未対応 |
 | (16) | SNMPサービス、ESMPRO/ServerAgentService | `s16_snmp` | 未対応 |
 | (17) | サービス | `s17_service` | `17_service_collect.yml` |
+
+(5) ネットワークアダプターと (6) ローカルユーザーは変数で対象を固定せず、
+サーバー上に存在するものを全件列挙して「アダプター名（ユーザー名）× 項目」で
+レコード化する。(5) で特定のアダプターだけにしたい場合は
+`netadapter_target_names` にアダプター名を並べる。
 
 最後に `99_register_parameters.yml` を実行して、収集結果をまとめて API 登録する。
 

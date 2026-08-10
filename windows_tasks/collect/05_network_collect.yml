@@ -1,0 +1,185 @@
+---
+# =====================================================================
+# [収集] ネットワークアダプター設定情報
+#
+# 対象は「サーバー上に存在する全ネットワークアダプター」。
+# netadapter_target_names を指定した場合はその名前のアダプターだけを収集する。
+#
+# 取得した内容はアダプター名をキーにした 1 つの変数へまとめ、
+# パラメータシート登録用ファイルへ network_info として JSON で出力する。
+#
+#   network_info: {"Ethernet0": {"adapter_name": "Ethernet0",
+#                                "ip_address": ["192.168.10.10"], ... }, ... }
+#
+# 収集する項目（アダプターごと）:
+#   - adapter_name                        ネットワークアダプター名
+#   - dhcp_enabled / ip_address / subnet_mask
+#                                         IPアドレスの取得方法・IPアドレス・サブネットマスク
+#   - dns_static / dns_servers            DNSサーバーアドレスの取得方法・アドレス
+#   - automatic_metric / interface_metric IP設定  > 自動メトリック・メトリック値
+#   - register_this_connections_address   DNS   > この接続のアドレスを DNS に登録する
+#   - wins_servers                        WINS  > WINS アドレス
+#   - netbios_option                      WINS  > NetBIOS 設定
+#                                         （0=DHCPサーバーから使用 / 1=有効 / 2=無効）
+#   - bindings                            プロトコル設定（true=有効 / false=無効 / null=未インストール）
+# =====================================================================
+- name: "05_ネットワークアダプター設定情報収集"
+  hosts: windows
+  gather_facts: false
+
+  vars:
+    # 収集対象のアダプター名。空リスト = 全アダプター。
+    netadapter_target_names: []
+    # 非表示アダプター（Loopback / WFP 等）も含めるか
+    netadapter_include_hidden: false
+    # アダプターのプロパティ画面に並ぶ「この接続は次の項目を使用します」の対象
+    netadapter_component_ids:
+      - "ms_implat"   # Microsoft Network Adapter Multiplexor Protocol
+      - "ms_lldp"     # Microsoft LLDP プロトコル ドライバー
+      - "ms_tcpip6"   # インターネット プロトコル バージョン 6 (TCP/IPv6)
+      - "ms_rspndr"   # Link-Layer Topology Discovery Responder
+      - "ms_lltdio"   # Link-Layer Topology Discovery Mapper I/O Driver
+
+  tasks:
+    - name: ネットワークアダプター設定情報取得（Before）
+      ansible.windows.win_shell: |
+        $ErrorActionPreference = 'SilentlyContinue'
+
+        # プレフィックス長 -> サブネットマスク（24 -> 255.255.255.0）
+        function Get-MaskFromPrefix([int]$p) {
+          $o = @()
+          for ($i = 1; $i -le 4; $i++) {
+            $n = 8 * $i
+            if ($p -ge $n) { $o += 255 }
+            elseif ($p -le ($n - 8)) { $o += 0 }
+            else { $o += [int](256 - [math]::Pow(2, ($n - $p))) }
+          }
+          return ($o -join '.')
+        }
+
+        # PS5.1 の ConvertFrom-Json は配列を「1個のオブジェクト」としてパイプへ流すため、
+        # @(... | ConvertFrom-Json) と書くと要素数が常に 1 になる。
+        # 一度変数へ受けてから @() で配列化すること。
+        $targetsRaw = '{{ netadapter_target_names | to_json }}' | ConvertFrom-Json
+        $compsRaw   = '{{ netadapter_component_ids | to_json }}' | ConvertFrom-Json
+        $targets = @($targetsRaw)
+        $comps   = @($compsRaw)
+
+        if (${{ 'true' if netadapter_include_hidden else 'false' }}) {
+          $adapters = @(Get-NetAdapter -IncludeHidden)
+        } else {
+          $adapters = @(Get-NetAdapter)
+        }
+        if ($targets.Count -gt 0) {
+          $adapters = @($adapters | Where-Object { $targets -contains $_.Name })
+        }
+
+        $list = @()
+        foreach ($a in ($adapters | Sort-Object -Property Name)) {
+          $idx = [int]$a.ifIndex
+
+          # --- IPv4 アドレス / サブネットマスク ---
+          $ips = @(); $masks = @()
+          foreach ($ip in @(Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4)) {
+            $ips   += [string]$ip.IPAddress
+            $masks += (Get-MaskFromPrefix ([int]$ip.PrefixLength))
+          }
+
+          # --- DHCP / 自動メトリック / インターフェイスメトリック ---
+          $dhcp = $null; $autoMetric = $null; $ifMetric = $null
+          $ipif = Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4 | Select-Object -First 1
+          if ($ipif) {
+            $dhcp       = ($ipif.Dhcp -eq 'Enabled')
+            $autoMetric = ($ipif.AutomaticMetric -eq 'Enabled')
+            $ifMetric   = [int]$ipif.InterfaceMetric
+          }
+
+          # --- DNS サーバーアドレス / DNS 登録 ---
+          $dnsSrv = @()
+          $d = Get-DnsClientServerAddress -InterfaceIndex $idx -AddressFamily IPv4
+          if ($d) { $dnsSrv = @($d.ServerAddresses) }
+          $dnsReg = $null
+          $dc = Get-DnsClient -InterfaceIndex $idx
+          if ($dc) { $dnsReg = [bool]$dc.RegisterThisConnectionsAddress }
+          # 手動設定かどうかはレジストリの NameServer で判定する
+          # （Get-DnsClientServerAddress は DHCP 配布分も同じように返すため）
+          # 末尾が \ の文字列リテラルは Ansible の引数分割で壊れるため Join-Path で連結する
+          $regBase = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
+          $ns = (Get-ItemProperty -Path (Join-Path $regBase $a.InterfaceGuid) -Name NameServer).NameServer
+          $dnsStatic = -not [string]::IsNullOrWhiteSpace($ns)
+
+          # --- WINS / NetBIOS ---
+          $wins = @(); $nb = $null
+          $cfg = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter "InterfaceIndex=$idx" | Select-Object -First 1
+          if ($cfg) {
+            foreach ($w in @($cfg.WINSPrimaryServer, $cfg.WINSSecondaryServer)) {
+              if (-not [string]::IsNullOrWhiteSpace($w)) { $wins += [string]$w }
+            }
+            if ($null -ne $cfg.TcpipNetbiosOptions) { $nb = [int]$cfg.TcpipNetbiosOptions }
+          }
+
+          # --- プロトコル（バインディング）。未インストールは $null ---
+          $bind = [ordered]@{}
+          foreach ($c in $comps) {
+            $b = Get-NetAdapterBinding -Name $a.Name -ComponentID $c
+            if ($b) { $bind[$c] = [bool]$b.Enabled } else { $bind[$c] = $null }
+          }
+
+          $list += [PSCustomObject][ordered]@{
+            Name            = [string]$a.Name
+            IfIndex         = $idx
+            Description     = [string]$a.InterfaceDescription
+            Status          = [string]$a.Status
+            DhcpEnabled     = $dhcp
+            IpAddresses     = @($ips)
+            SubnetMasks     = @($masks)
+            AutomaticMetric = $autoMetric
+            InterfaceMetric = $ifMetric
+            DnsServers      = @($dnsSrv)
+            DnsStatic       = $dnsStatic
+            DnsRegister     = $dnsReg
+            WinsServers     = @($wins)
+            NetbiosOption   = $nb
+            Bindings        = $bind
+          }
+        }
+        ConvertTo-Json -InputObject @($list) -Compress -Depth 5
+      args:
+        executable: powershell
+      changed_when: false
+      register: netadapter_info
+
+    - name: パラメータシート登録用形式設定
+      set_fact:
+        netadapter_raw: >-
+          {{ netadapter_raw | default({}) | combine({ item.Name: {
+               'adapter_name': item.Name,
+               'dhcp_enabled': item.DhcpEnabled,
+               'ip_address': item.IpAddresses,
+               'subnet_mask': item.SubnetMasks,
+               'dns_static': item.DnsStatic,
+               'dns_servers': item.DnsServers,
+               'automatic_metric': item.AutomaticMetric,
+               'interface_metric': item.InterfaceMetric,
+               'register_this_connections_address': item.DnsRegister,
+               'wins_servers': item.WinsServers,
+               'netbios_option': item.NetbiosOption,
+               'bindings': item.Bindings
+             } }) }}
+      loop: "{{ netadapter_info.stdout | from_json }}"
+      loop_control:
+        label: "{{ item.Name }}"
+
+    - name: 取得情報出力
+      debug:
+        msg: |
+          "{{ netadapter_raw }}"
+
+    - name: パラメータシート登録用ファイル出力
+      blockinfile:
+        create: yes
+        mode: '0644'
+        dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/network"
+        block: |
+          network_info: {{ netadapter_raw | trim | to_json(ensure_ascii=False) }}
+      delegate_to: localhost

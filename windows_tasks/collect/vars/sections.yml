@@ -13,24 +13,29 @@
 # 項目キーは大項目のプレフィックス（下記 prefix）を付けて出力する。
 # 一意制約や期待値との突き合わせに使えるよう、値ではなくキーで識別できるようにしている。
 # =====================================================================
+#
+# !!! 注意 !!! キー "no" は必ずクォートすること。
+# クォートしないと YAML 1.1 のブール解決で False というキーになり、
+# 各 collect Playbook の sec.no が 'dict object' has no attribute 'no' で失敗する。
+# （yes / on / off も同様）
 param_sections:
-  rdp:          {no: 1,  name: "リモートデスクトップ",                        prefix: "s01_rdp"}
-  computer:     {no: 2,  name: "コンピューター名",                            prefix: "s02_computer"}
-  performance:  {no: 3,  name: "パフォーマンス",                              prefix: "s03_performance"}
-  dump:         {no: 4,  name: "メモリダンプ",                                prefix: "s04_dump"}
-  netadapter:   {no: 5,  name: "ネットワークアダプター",                      prefix: "s05_netadapter"}
-  computermgmt: {no: 6,  name: "コンピューターの管理",                        prefix: "s06_computermgmt"}
-  ntp:          {no: 7,  name: "NTPサーバの設定",                             prefix: "s07_ntp"}
-  feature:      {no: 8,  name: "役割と機能",                                  prefix: "s08_feature"}
-  policy:       {no: 9,  name: "ローカルセキュリティポリシー",                prefix: "s09_policy"}
-  firewall:     {no: 10, name: "Windowsファイアウォール",                     prefix: "s10_fw"}
-  registry:     {no: 11, name: "変更レジストリ",                              prefix: "s11_registry"}
-  teaming:      {no: 12, name: "ネットワークのチーム化と優先度、IPv6無効化",  prefix: "s12_teaming"}
-  smb:          {no: 13, name: "SMB3.0 マルチチャネルの無効化",               prefix: "s13_smb"}
-  software:     {no: 14, name: "ソフトウェア制御",                            prefix: "s14_uac"}
-  eventlog:     {no: 15, name: "イベントログ",                                prefix: "s15_eventlog"}
-  snmp:         {no: 16, name: "SNMPサービス、ESMPRO/ServerAgentService",     prefix: "s16_snmp"}
-  service:      {no: 17, name: "サービス",                                    prefix: "s17_service"}
+  rdp:          {"no": 1,  name: "リモートデスクトップ",                        prefix: "s01_rdp"}
+  computer:     {"no": 2,  name: "コンピューター名",                            prefix: "s02_computer"}
+  performance:  {"no": 3,  name: "パフォーマンス",                              prefix: "s03_performance"}
+  dump:         {"no": 4,  name: "メモリダンプ",                                prefix: "s04_dump"}
+  netadapter:   {"no": 5,  name: "ネットワークアダプター",                      prefix: "s05_netadapter"}
+  computermgmt: {"no": 6,  name: "コンピューターの管理",                        prefix: "s06_computermgmt"}
+  ntp:          {"no": 7,  name: "NTPサーバの設定",                             prefix: "s07_ntp"}
+  feature:      {"no": 8,  name: "役割と機能",                                  prefix: "s08_feature"}
+  policy:       {"no": 9,  name: "ローカルセキュリティポリシー",                prefix: "s09_policy"}
+  firewall:     {"no": 10, name: "Windowsファイアウォール",                     prefix: "s10_fw"}
+  registry:     {"no": 11, name: "変更レジストリ",                              prefix: "s11_registry"}
+  teaming:      {"no": 12, name: "ネットワークのチーム化と優先度、IPv6無効化",  prefix: "s12_teaming"}
+  smb:          {"no": 13, name: "SMB3.0 マルチチャネルの無効化",               prefix: "s13_smb"}
+  software:     {"no": 14, name: "ソフトウェア制御",                            prefix: "s14_uac"}
+  eventlog:     {"no": 15, name: "イベントログ",                                prefix: "s15_eventlog"}
+  snmp:         {"no": 16, name: "SNMPサービス、ESMPRO/ServerAgentService",     prefix: "s16_snmp"}
+  service:      {"no": 17, name: "サービス",                                    prefix: "s17_service"}
 
 # ローカルユーザーはチェックシートでは (6) コンピューターの管理 配下の
 # 「ローカルユーザーとグループ」に該当するため、同じ大項目に含める。
