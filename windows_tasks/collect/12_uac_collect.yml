@@ -11,17 +11,42 @@
 #              "notification_level": "既定 - ..."}
 #
 # notification_level はスライダーの位置。レジストリ値の組み合わせを
-# ../vars/12_uac.yml の uac_levels で画面表示のラベルに変換している。
+# 下の uac_levels で画面表示のラベルに変換している。
 # =====================================================================
 - name: "12_ソフトウェア制御（UAC）設定情報収集"
   hosts: windows
   gather_facts: false
 
-  vars_files:
-    - ../vars/12_uac.yml
-
   vars:
     uac_reg_path: 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+
+    # UAC スライダーの段階とレジストリ値の対応表（Windows の仕様。変更しないこと）
+    #   ConsentPromptBehaviorAdmin : 管理者に対する昇格プロンプトの動作
+    #   PromptOnSecureDesktop      : セキュリティで保護されたデスクトップ（画面の暗転）
+    uac_levels:
+      # 一番上（最も厳しい）
+      - level: 4
+        label: "常に通知する"
+        consent_prompt_behavior_admin: 2
+        prompt_on_secure_desktop: 1
+
+      # 上から2番目 = Windows 既定
+      - level: 3
+        label: "アプリがコンピューターに変更を加えようとする場合のみ通知する（既定）"
+        consent_prompt_behavior_admin: 5
+        prompt_on_secure_desktop: 1
+
+      # 上から3番目（デスクトップを暗転しない）
+      - level: 2
+        label: "アプリがコンピューターに変更を加えようとする場合のみ通知する（デスクトップを暗転しない）"
+        consent_prompt_behavior_admin: 5
+        prompt_on_secure_desktop: 0
+
+      # 一番下（通知しない）
+      - level: 1
+        label: "通知しない"
+        consent_prompt_behavior_admin: 0
+        prompt_on_secure_desktop: 0
 
   tasks:
     - name: ソフトウェア制御（UAC）設定情報取得（Before）

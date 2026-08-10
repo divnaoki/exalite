@@ -2,7 +2,8 @@
 # =====================================================================
 # [収集] サービス設定情報
 #
-# 対象サービスは ../vars/07_service_disable.yml の target_services を使う。
+# 対象サービスは下の target_services で指定する
+# （設定変更側の変数ファイルは参照しない）。
 #
 # 取得した内容をサービス名をキーにした 1 つの変数へまとめ、
 # パラメータシート登録用ファイルへ service_info として JSON で出力する。
@@ -15,8 +16,24 @@
   hosts: windows
   gather_facts: false
 
-  vars_files:
-    - ../vars/07_service_disable.yml
+  vars:
+    # 収集対象のサービス（name = サービス名。コメントは services.msc の表示名）。
+    # 対象サーバーに存在しないサービスは exists: false で出力する。
+    target_services:
+      - name: "bthserv"              # Bluetooth サポート サービス
+      - name: "vmictimesync"         # Hyper-V Time Synchronization Service
+      - name: "wlidsvc"              # Microsoft Account Sign-in Assistant
+      - name: "PcaSvc"               # Program Compatibility Assistant Service
+      - name: "QWAVE"                # Quality Windows Audio Video Experience
+      - name: "WiaRpc"               # Still Image Acquisition Events
+      - name: "TabletInputService"   # Touch Keyboard and Handwriting Panel Service
+      - name: "Audiosrv"             # Windows Audio
+      - name: "AudioEndpointBuilder" # Windows Audio Endpoint Builder
+      - name: "WbioSrvc"             # Windows Biometric Service
+      - name: "stisvc"               # Windows Image Acquisition (WIA)
+      - name: "FrameServer"          # Windows カメラ フレーム サーバー
+      - name: "FrameServerMonitor"   # Windows カメラ フレーム サーバー モニター
+      - name: "WpnService"           # Windows プッシュ通知システム サービス
 
   tasks:
     - name: サービス設定情報取得（Before）

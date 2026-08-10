@@ -2,7 +2,9 @@
 # =====================================================================
 # [収集] 役割と機能の設定情報
 #
-# 対象機能は ../vars/10_server_features.yml の target_features を使う。
+# 対象機能は下の target_features で指定する（設定変更側の変数ファイルは参照しない）。
+# 収集に必要なのは name（Get-WindowsFeature の Name）と label（画面表示名）だけ。
+#
 # 取得した内容を機能名をキーにした 1 つの変数へまとめ、
 # パラメータシート登録用ファイルへ server_features_info として JSON で出力する。
 #
@@ -16,8 +18,56 @@
   hosts: windows
   gather_facts: false
 
-  vars_files:
-    - ../vars/10_server_features.yml
+  vars:
+    # 収集対象の役割と機能（チェックシート No.1〜31 の並び順）
+    #   name  : Get-WindowsFeature の Name（表示名ではない）
+    #   label : 画面表示名
+    target_features:
+      # --- No.1-2 ファイルサービスと記憶域サービス ---
+      - {name: "FileAndStorage-Services", label: "ファイルサービスと記憶域サービス"}
+      - {name: "Storage-Services",        label: "記憶域サービス"}
+
+      # --- No.3-6 .NET Framework 3.5 ---
+      - {name: "NET-Framework-Features",  label: ".NET Framework 3.5 Features"}
+      - {name: "NET-Framework-Core",      label: ".NET Framework 3.5(.NET 2.0 および 3.0 を含む)"}
+      - {name: "NET-HTTP-Activation",     label: "HTTP アクティブ化(3.5)"}
+      - {name: "NET-Non-HTTP-Activ",      label: "非 HTTP アクティブ化(3.5)"}
+
+      # --- No.7-15 .NET Framework 4.8 ---
+      - {name: "NET-Framework-45-Features", label: ".NET Framework 4.8 Features"}
+      - {name: "NET-Framework-45-Core",     label: ".NET Framework 4.8"}
+      - {name: "NET-Framework-45-ASPNET",   label: "ASP.NET 4.8"}
+      - {name: "NET-WCF-Services45",        label: "WCF サービス"}
+      - {name: "NET-WCF-HTTP-Activation45", label: "HTTP アクティブ化(WCF)"}
+      - {name: "NET-WCF-TCP-Activation45",  label: "TCP アクティブ化(WCF)"}
+      - {name: "NET-WCF-TCP-PortSharing45", label: "TCP ポート共有(WCF)"}
+      - {name: "NET-WCF-MSMQ-Activation45", label: "メッセージキュー(MSMQ)アクティブ化"}
+      - {name: "NET-WCF-Pipe-Activation45", label: "名前付きパイプのアクティブ化"}
+
+      # --- No.16-19 Azure Arc / Defender / SNMP ---
+      # AzureArcSetup は OS のビルドによっては存在しない（exists: false になる）
+      - {name: "AzureArcSetup",     label: "Azure Arc Setup"}
+      - {name: "Windows-Defender",  label: "Microsoft Defender ウイルス対策"}
+      - {name: "SNMP-Service",      label: "SNMP サービス"}
+      - {name: "SNMP-WMI-Provider", label: "WMI SNMP プロバイダー"}
+
+      # --- No.20-24 Windows PowerShell ---
+      - {name: "PowerShellRoot",             label: "Windows PowerShell"}
+      - {name: "PowerShell",                 label: "Windows PowerShell 5.1"}
+      - {name: "PowerShell-V2",              label: "Windows PowerShell 2.0 エンジン"}
+      - {name: "DSC-Service",                label: "Windows PowerShell Desired State Configuration Service"}
+      - {name: "WindowsPowerShellWebAccess", label: "Windows PowerShell Web Access"}
+
+      # --- No.25-28 その他の機能 ---
+      - {name: "Windows-Server-Backup", label: "Windows Server バックアップ"}
+      - {name: "WoW64-Support",         label: "WoW64 サポート"}
+      - {name: "XPS-Viewer",            label: "XPS Viewer"}
+      - {name: "System-DataArchiver",   label: "システム データ アーカイバー"}
+
+      # --- No.29-31 リモートサーバー管理ツール ---
+      - {name: "RSAT",               label: "リモートサーバー管理ツール"}
+      - {name: "RSAT-Feature-Tools", label: "機能管理ツール"}
+      - {name: "RSAT-SNMP",          label: "SNMP ツール"}
 
   tasks:
     - name: 役割と機能の設定情報取得（Before）

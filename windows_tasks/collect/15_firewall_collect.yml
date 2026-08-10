@@ -2,8 +2,8 @@
 # =====================================================================
 # [収集] Windowsファイアウォール設定情報
 #
-# 対象プロファイル・受信の規則は ../vars/15_firewall.yml の
-# fw_profile_settings / fw_rules を使う。
+# 対象プロファイル・受信の規則は下の fw_profile_settings / fw_rules で指定する
+# （設定変更側の変数ファイルは参照しない）。収集に必要なのは name と label だけ。
 #
 # 取得した内容を 1 つの変数へまとめ、パラメータシート登録用ファイルへ
 # firewall_info として JSON で出力する。
@@ -21,8 +21,18 @@
   hosts: windows
   gather_facts: false
 
-  vars_files:
-    - ../vars/15_firewall.yml
+  vars:
+    # 収集対象のプロファイル
+    fw_profile_settings:
+      - {name: "Domain",  label: "ドメイン プロファイル"}
+      - {name: "Private", label: "プライベート プロファイル"}
+      - {name: "Public",  label: "パブリック プロファイル"}
+
+    # 収集対象の受信の規則（name = Get-NetFirewallRule の Name）。
+    # 表示名（DisplayName）は OS の言語で変わるが規則名は変わらない。
+    # 対象サーバーに存在しない規則は exists: false で出力する。
+    fw_rules:
+      - {name: "FPS-ICMP4-ERQ-In", label: "ファイルとプリンターの共有 (エコー要求 - ICMPv4 受信)"}
 
   tasks:
     - name: Windowsファイアウォール設定情報取得（Before）

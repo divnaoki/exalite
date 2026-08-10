@@ -13,12 +13,16 @@
   hosts: windows
   gather_facts: false
 
-  vars_files:
-    - ../vars/13_rdp.yml
-
   vars:
     reg_ts: 'HKLM:\System\CurrentControlSet\Control\Terminal Server'
     reg_rdp: 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
+
+    # 状態を確認するファイアウォール規則（規則名 = Get-NetFirewallRule の Name）。
+    # 表示名（DisplayName）は OS の言語で変わるが規則名は変わらない。
+    # 全て有効なときだけ firewall_enabled が true になる。
+    rdp_firewall_rules:
+      - "RemoteDesktop-UserMode-In-TCP"   # TCP 3389（RDP 本体）
+      - "RemoteDesktop-UserMode-In-UDP"   # UDP 3389（画面転送の高速化に使用）
 
   tasks:
     - name: リモートデスクトップ設定情報取得（Before）

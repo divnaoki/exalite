@@ -32,17 +32,28 @@ memory_dump_info: "{'crash_dump_enabled': 2, 'crash_dump_type': 'カーネルダ
 | Playbook | 出力ファイル | 変数名 | 対象の指定 |
 |---|---|---|---|
 | `02_computer_name_collect.yml` | `computer_name` | `computer_name_info` | － |
-| `05_network_collect.yml` | `network` | `network_info` | 全アダプター列挙 |
+| `05_network_collect.yml` | `network` | `network_info` | 全アダプター列挙（`netadapter_target_names` で絞り込み可） |
 | `09_local_policy_collect.yml` | `local_policy` | `local_policy_info` | － |
-| `10_server_features_collect.yml` | `server_features` | `server_features_info` | `../vars/10_server_features.yml` |
+| `10_server_features_collect.yml` | `server_features` | `server_features_info` | `target_features` |
 | `11_local_users_collect.yml` | `local_users` | `local_users_info` | 全ユーザー列挙 |
-| `12_uac_collect.yml` | `uac` | `uac_info` | `../vars/12_uac.yml` |
-| `13_rdp_collect.yml` | `rdp` | `rdp_info` | `../vars/13_rdp.yml` |
+| `12_uac_collect.yml` | `uac` | `uac_info` | `uac_levels`（対応表） |
+| `13_rdp_collect.yml` | `rdp` | `rdp_info` | `rdp_firewall_rules` |
 | `13_smb_collect.yml` | `smb` | `smb_info` | － |
 | `14_time_sync_collect.yml` | `time_sync` | `time_sync_info` | － |
-| `15_firewall_collect.yml` | `firewall` | `firewall_info` | `../vars/15_firewall.yml` |
+| `15_firewall_collect.yml` | `firewall` | `firewall_info` | `fw_profile_settings` / `fw_rules` |
 | `16_memory_dump_collect.yml` | `memory_dump` | `memory_dump_info` | － |
-| `17_service_collect.yml` | `service` | `service_info` | `../vars/07_service_disable.yml` |
+| `17_service_collect.yml` | `service` | `service_info` | `target_services` |
+
+### 変数は各 Playbook 内で完結させる
+
+収集対象の指定（上表の「対象の指定」列）は、**設定変更側の `../vars/*.yml` を
+読み込まず、各 collect Playbook の `vars:` に直接書く**。`vars_files` は使わない。
+
+設定変更側の変数には「設定したい値」（`enabled` など）が含まれるが、収集側で
+必要なのは対象の `name` と表示用の `label` だけなので、その2つだけを持つ。
+
+対象を増減するときは各 collect Playbook の `vars:` を直接編集する。
+設定変更側の変数ファイルとは連動しないため、対象を追加した場合は両方に反映すること。
 
 未対応の大項目: パフォーマンス / 変更レジストリ / ネットワークのチーム化 /
 イベントログ / SNMP・ESMPRO。
