@@ -1,37 +1,34 @@
 ---
 # =====================================================================
-# [収集] (10) Windowsファイアウォール -> パラメータシート用の変数ファイル出力
+# [収集] Windowsファイアウォール設定情報
 #
-# 出力する変数名: collected_firewall__<ホスト名>
-# 値はパラメータシートと同じ表記（有効（推奨）/ ブロック（既定）等）にする。
+# 対象プロファイル・受信の規則は ../vars/15_firewall.yml の
+# fw_profile_settings / fw_rules を使う。
+#
+# 取得した内容を 1 つの変数へまとめ、パラメータシート登録用ファイルへ
+# firewall_info として JSON で出力する。
+#
+#   firewall_info:
+#     {"profiles": {"Domain": {"name": "Domain", "label": "ドメイン プロファイル",
+#                              "enabled": true,
+#                              "default_inbound_action": "Block",
+#                              "default_outbound_action": "Allow"}, ... },
+#      "rules": {"RemoteDesktop-UserMode-In-TCP": {"name": ..., "label": ...,
+#                                                  "exists": true, "enabled": true,
+#                                                  "profile": "Any"}, ... }}
 # =====================================================================
-- name: "[収集] (10) Windowsファイアウォール"
+- name: "15_Windowsファイアウォール設定情報収集"
   hosts: windows
   gather_facts: false
 
   vars_files:
-    - vars/sections.yml
     - ../vars/15_firewall.yml
 
-  vars:
-    sec: "{{ param_sections.firewall }}"
-    sec_menu: "{{ param_section_menus.firewall | default(param_section_menu_default) }}"
-    var_key: "collected_firewall__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
-    # 取得値 -> パラメータシートの表記
-    fw_state_labels:
-      "True": "有効（推奨）"
-      "False": "無効"
-    fw_action_labels:
-      "Block": "ブロック（既定）"
-      "Allow": "許可（既定）"
-      "NotConfigured": "未構成"
-    fw_profile_labels:
-      "Any": "すべて"
-
   tasks:
-    - name: "現在のファイアウォール設定を取得"
+    - name: Windowsファイアウォール設定情報取得（Before）
       ansible.windows.win_shell: |
-        $names = '{{ fw_profile_settings | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $namesRaw = '{{ fw_profile_settings | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $names = @($namesRaw)
         $profiles = @(Get-NetFirewallProfile -Profile $names | ForEach-Object {
           [ordered]@{
             Name     = $_.Name
@@ -40,7 +37,8 @@
             Outbound = $_.DefaultOutboundAction.ToString()
           }
         })
-        $ruleNames = '{{ fw_rules | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $ruleNamesRaw = '{{ fw_rules | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $ruleNames = @($ruleNamesRaw)
         $rules = @(Get-NetFirewallRule -Name $ruleNames -EA SilentlyContinue | ForEach-Object {
           [ordered]@{
             Name    = $_.Name
@@ -52,71 +50,57 @@
       args:
         executable: powershell
       changed_when: false
-      register: fw_raw
+      register: fw_info
 
-    - name: "取得結果を名前で引ける辞書に格納"
-      ansible.builtin.set_fact:
-        fw_cur_map: >-
-          {{ dict((fw_raw.stdout | from_json).Profiles | map(attribute='Name')
-             | zip((fw_raw.stdout | from_json).Profiles)) }}
-        fw_rule_map: >-
-          {{ dict((fw_raw.stdout | from_json).Rules | map(attribute='Name')
-             | zip((fw_raw.stdout | from_json).Rules)) }}
-
-    # プロファイル × 3項目 = 3レコード
-    - name: "項目を組み立て（プロファイル）"
-      ansible.builtin.set_fact:
-        fw_rows: >-
-          {{ fw_rows | default([]) + [
-               { 'key': (sec.prefix ~ '_' ~ (item.name | lower) ~ '_enabled'),
-                 'item': (item.label ~ ' / 状態 / ファイアウォールの状態'),
-                 'value': (fw_state_labels[(cur.Enabled | string)] | default('不明', true)) },
-               { 'key': (sec.prefix ~ '_' ~ (item.name | lower) ~ '_inbound'),
-                 'item': (item.label ~ ' / 状態 / 受信接続'),
-                 'value': (fw_action_labels[cur.Inbound] | default(cur.Inbound, true)) },
-               { 'key': (sec.prefix ~ '_' ~ (item.name | lower) ~ '_outbound'),
-                 'item': (item.label ~ ' / 状態 / 送信接続'),
-                 'value': (fw_action_labels[cur.Outbound] | default(cur.Outbound, true)) } ] }}
+    - name: パラメータシート登録用形式設定（プロファイル）
+      set_fact:
+        firewall_raw: >-
+          {{ firewall_raw | default({'profiles': {}, 'rules': {}})
+             | combine({'profiles': { item.name: {
+                 'name': item.name,
+                 'label': item.label,
+                 'enabled': cur.Enabled,
+                 'default_inbound_action': cur.Inbound,
+                 'default_outbound_action': cur.Outbound
+               } }}, recursive=true) }}
       vars:
-        cur: "{{ fw_cur_map[item.name] }}"
+        prof_map: >-
+          {{ dict((fw_info.stdout | from_json).Profiles | map(attribute='Name')
+             | zip((fw_info.stdout | from_json).Profiles)) }}
+        cur: "{{ prof_map[item.name] }}"
       loop: "{{ fw_profile_settings }}"
       loop_control:
         label: "{{ item.label }}"
 
-    # 受信の規則（存在しない場合は「存在しない」を残す）
-    - name: "項目を組み立て（受信の規則）"
-      ansible.builtin.set_fact:
-        fw_rows: >-
-          {{ fw_rows + [
-               { 'key': (sec.prefix ~ '_rule_' ~ (item.name | lower | regex_replace('[^0-9a-z]', '_')) ~ '_enabled'),
-                 'item': ('受信の規則 / ' ~ item.label ~ ' / 有効'),
-                 'value': ('存在しない' if (item.name not in fw_rule_map)
-                           else ('TRUE' if (fw_rule_map[item.name].Enabled | bool) else 'FALSE')) },
-               { 'key': (sec.prefix ~ '_rule_' ~ (item.name | lower | regex_replace('[^0-9a-z]', '_')) ~ '_profile'),
-                 'item': ('受信の規則 / ' ~ item.label ~ ' / プロファイル'),
-                 'value': ('存在しない' if (item.name not in fw_rule_map)
-                           else (fw_profile_labels[fw_rule_map[item.name].Profile]
-                                 | default(fw_rule_map[item.name].Profile, true))) } ] }}
+    # 存在しない規則は exists: false とし、enabled / profile は null にする
+    - name: パラメータシート登録用形式設定（受信の規則）
+      set_fact:
+        firewall_raw: >-
+          {{ firewall_raw | combine({'rules': { item.name: {
+               'name': item.name,
+               'label': item.label,
+               'exists': (item.name in rule_map),
+               'enabled': (rule_map[item.name].Enabled if (item.name in rule_map) else none),
+               'profile': (rule_map[item.name].Profile if (item.name in rule_map) else none)
+             } }}, recursive=true) }}
+      vars:
+        rule_map: >-
+          {{ dict((fw_info.stdout | from_json).Rules | map(attribute='Name')
+             | zip((fw_info.stdout | from_json).Rules)) }}
       loop: "{{ fw_rules }}"
       loop_control:
         label: "{{ item.label }}"
 
-    - name: "登録用レコードを作成"
-      ansible.builtin.set_fact:
-        fw_record: >-
-          {{ { 'menu': sec_menu,
-               'host_name': inventory_hostname,
-               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
-               'rows': fw_rows } }}
+    - name: 取得情報出力
+      debug:
+        msg: |
+          "{{ firewall_raw }}"
 
-    - name: "変数ファイルを出力"
-      ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+    - name: パラメータシート登録用ファイル出力
+      blockinfile:
+        create: yes
         mode: '0644'
-        content: "{{ { var_key: fw_record } | to_nice_yaml }}"
+        dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/firewall"
+        block: |
+          firewall_info: {{ firewall_raw | trim | to_json(ensure_ascii=False) }}
       delegate_to: localhost
-      changed_when: true
-
-    - name: "出力内容を表示"
-      ansible.builtin.debug:
-        var: fw_record

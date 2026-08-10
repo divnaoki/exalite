@@ -1,27 +1,29 @@
 ---
 # =====================================================================
-# [収集] (8) 役割と機能 -> パラメータシート用の変数ファイル出力
+# [収集] 役割と機能の設定情報
 #
-# 出力する変数名: collected_feature__<ホスト名>
-# 項目名は s08_feature_<機能名>、値は TRUE / FALSE / 存在しない。
+# 対象機能は ../vars/10_server_features.yml の target_features を使う。
+# 取得した内容を機能名をキーにした 1 つの変数へまとめ、
+# パラメータシート登録用ファイルへ server_features_info として JSON で出力する。
+#
+#   server_features_info: {"Web-Server": {"name": "Web-Server",
+#                                         "label": "Web サーバー (IIS)",
+#                                         "exists": true,
+#                                         "installed": false,
+#                                         "install_state": "Available"}, ... }
 # =====================================================================
-- name: "[収集] (8) 役割と機能"
+- name: "10_役割と機能の設定情報収集"
   hosts: windows
   gather_facts: false
 
   vars_files:
-    - vars/sections.yml
     - ../vars/10_server_features.yml
 
-  vars:
-    sec: "{{ param_sections.feature }}"
-    sec_menu: "{{ param_section_menus.feature | default(param_section_menu_default) }}"
-    var_key: "collected_feature__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
-
   tasks:
-    - name: "現在の役割と機能を取得"
+    - name: 役割と機能の設定情報取得（Before）
       ansible.windows.win_shell: |
-        $names = '{{ target_features | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $namesRaw = '{{ target_features | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $names = @($namesRaw)
         Import-Module ServerManager -ErrorAction SilentlyContinue
         # 存在しない名前を -Name で渡すと非終了エラーになるため全件取得してから引く
         $all = @{}
@@ -45,44 +47,37 @@
       args:
         executable: powershell
       changed_when: false
-      register: feat_raw
+      register: feature_info
 
-    - name: "取得結果を機能名で引ける辞書に格納"
-      ansible.builtin.set_fact:
+    - name: パラメータシート登録用形式設定
+      set_fact:
+        feature_raw: >-
+          {{ feature_raw | default({}) | combine({ item.name: {
+               'name': item.name,
+               'label': (item.label | default(item.name, true)),
+               'exists': cur.Exists,
+               'installed': cur.Installed,
+               'install_state': cur.InstallState
+             } }) }}
+      vars:
         feat_map: >-
-          {{ dict((feat_raw.stdout | from_json) | map(attribute='Name')
-             | zip(feat_raw.stdout | from_json)) }}
-
-    # 機能1つ = 1レコード。項目名は vars/10_server_features.yml の label（日本語）を使う。
-    - name: "項目を組み立て"
-      ansible.builtin.set_fact:
-        feat_rows: >-
-          {{ feat_rows | default([]) + [ {
-               'key': (sec.prefix ~ '_' ~ (item.name | regex_replace('[^0-9a-zA-Z]', '_'))),
-               'item': ((item.label | default(item.name)) ~ ' [' ~ item.name ~ ']'),
-               'value': ('存在しない' if not (feat_map[item.name].Exists | bool)
-                         else ('TRUE' if (feat_map[item.name].Installed | bool) else 'FALSE'))
-             } ] }}
+          {{ dict((feature_info.stdout | from_json) | map(attribute='Name')
+             | zip(feature_info.stdout | from_json)) }}
+        cur: "{{ feat_map[item.name] }}"
       loop: "{{ target_features }}"
       loop_control:
         label: "{{ item.name }}"
 
-    - name: "登録用レコードを作成"
-      ansible.builtin.set_fact:
-        feat_record: >-
-          {{ { 'menu': sec_menu,
-               'host_name': inventory_hostname,
-               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
-               'rows': feat_rows } }}
+    - name: 取得情報出力
+      debug:
+        msg: |
+          "{{ feature_raw }}"
 
-    - name: "変数ファイルを出力"
-      ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+    - name: パラメータシート登録用ファイル出力
+      blockinfile:
+        create: yes
         mode: '0644'
-        content: "{{ { var_key: feat_record } | to_nice_yaml }}"
+        dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/server_features"
+        block: |
+          server_features_info: {{ feature_raw | trim | to_json(ensure_ascii=False) }}
       delegate_to: localhost
-      changed_when: true
-
-    - name: "出力内容を表示"
-      ansible.builtin.debug:
-        var: feat_record

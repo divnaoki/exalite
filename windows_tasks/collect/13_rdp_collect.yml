@@ -1,28 +1,30 @@
 ---
 # =====================================================================
-# [収集] (1) リモートデスクトップ -> パラメータシート用の変数ファイル出力
+# [収集] リモートデスクトップ設定情報
 #
-# 出力する変数名: collected_rdp__<ホスト名>
+# 取得した内容を 1 つの変数へまとめ、パラメータシート登録用ファイルへ
+# rdp_info として JSON で出力する。
+#
+#   rdp_info: {"allow_connections": true,
+#              "require_nla": true,
+#              "firewall_enabled": true}
 # =====================================================================
-- name: "[収集] (1) リモートデスクトップ"
+- name: "13_リモートデスクトップ設定情報収集"
   hosts: windows
   gather_facts: false
 
   vars_files:
-    - vars/sections.yml
     - ../vars/13_rdp.yml
 
   vars:
-    sec: "{{ param_sections.rdp }}"
-    sec_menu: "{{ param_section_menus.rdp | default(param_section_menu_default) }}"
-    var_key: "collected_rdp__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
     reg_ts: 'HKLM:\System\CurrentControlSet\Control\Terminal Server'
     reg_rdp: 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
 
   tasks:
-    - name: "現在のリモートデスクトップ設定を取得"
+    - name: リモートデスクトップ設定情報取得（Before）
       ansible.windows.win_shell: |
-        $names = '{{ rdp_firewall_rules | to_json }}' | ConvertFrom-Json
+        $namesRaw = '{{ rdp_firewall_rules | to_json }}' | ConvertFrom-Json
+        $names = @($namesRaw)
         $fw = @(Get-NetFirewallRule -Name $names -EA SilentlyContinue)
         [ordered]@{
           # fDenyTSConnections は値が反転している（0 = 接続を許可する）
@@ -33,36 +35,27 @@
       args:
         executable: powershell
       changed_when: false
-      register: rdp_raw
+      register: rdp_reg_info
 
-    - name: "登録用レコードを作成"
-      ansible.builtin.set_fact:
-        rdp_record: >-
-          {{ { 'menu': sec_menu,
-               'host_name': inventory_hostname,
-               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
-               'rows': [
-                 { 'key': (sec.prefix ~ '_allow_connections'),
-                   'item': 'リモートデスクトップ / このコンピューターへの接続を許可する',
-                   'value': ('TRUE' if (cur.AllowConnections | bool) else 'FALSE') },
-                 { 'key': (sec.prefix ~ '_require_nla'),
-                   'item': 'ネットワークレベル認証でリモートデスクトップを実行しているコンピューターからのみ接続を許可する（推奨）',
-                   'value': ('TRUE' if (cur.RequireNLA | bool) else 'FALSE') },
-                 { 'key': (sec.prefix ~ '_firewall_enabled'),
-                   'item': 'ファイアウォール規則（リモートデスクトップ）の有効',
-                   'value': ('TRUE' if (cur.FirewallEnabled | bool) else 'FALSE') }
-               ] } }}
+    - name: パラメータシート登録用形式設定
+      set_fact:
+        rdp_raw: >-
+          {{ { 'allow_connections': cur.AllowConnections,
+               'require_nla': cur.RequireNLA,
+               'firewall_enabled': cur.FirewallEnabled } }}
       vars:
-        cur: "{{ rdp_raw.stdout | from_json }}"
+        cur: "{{ rdp_reg_info.stdout | from_json }}"
 
-    - name: "変数ファイルを出力"
-      ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+    - name: 取得情報出力
+      debug:
+        msg: |
+          "{{ rdp_raw }}"
+
+    - name: パラメータシート登録用ファイル出力
+      blockinfile:
+        create: yes
         mode: '0644'
-        content: "{{ { var_key: rdp_record } | to_nice_yaml }}"
+        dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/rdp"
+        block: |
+          rdp_info: {{ rdp_raw | trim | to_json(ensure_ascii=False) }}
       delegate_to: localhost
-      changed_when: true
-
-    - name: "出力内容を表示"
-      ansible.builtin.debug:
-        var: rdp_record

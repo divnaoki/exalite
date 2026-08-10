@@ -1,36 +1,28 @@
 ---
 # =====================================================================
-# [収集] (17) サービス -> パラメータシート用の変数ファイル出力
+# [収集] サービス設定情報
 #
-# 出力する変数名: collected_service__<ホスト名>
-# 値はシートと同じ「無効 / 自動 / 手動 / 存在しない」で登録する。
+# 対象サービスは ../vars/07_service_disable.yml の target_services を使う。
 #
-# 対象サービスは vars/07_service_disable.yml の target_services を使う。
+# 取得した内容をサービス名をキーにした 1 つの変数へまとめ、
+# パラメータシート登録用ファイルへ service_info として JSON で出力する。
+#
+#   service_info: {"bthserv": {"name": "bthserv", "exists": true,
+#                              "start_type": "Disabled",
+#                              "status": "Stopped"}, ... }
 # =====================================================================
-- name: "[収集] (17) サービス"
+- name: "17_サービス設定情報収集"
   hosts: windows
   gather_facts: false
 
   vars_files:
-    - vars/sections.yml
     - ../vars/07_service_disable.yml
 
-  vars:
-    sec: "{{ param_sections.service }}"
-    sec_menu: "{{ param_section_menus.service | default(param_section_menu_default) }}"
-    var_key: "collected_service__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
-    # StartType -> シートの表記
-    svc_start_labels:
-      "Disabled": "無効"
-      "Automatic": "自動"
-      "Manual": "手動"
-      "Boot": "ブート"
-      "System": "システム"
-
   tasks:
-    - name: "現在のサービス設定を取得"
+    - name: サービス設定情報取得（Before）
       ansible.windows.win_shell: |
-        $names = '{{ target_services | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $namesRaw = '{{ target_services | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $names = @($namesRaw)
         $list = @()
         foreach ($n in $names) {
           $s = Get-Service -Name $n -ErrorAction SilentlyContinue
@@ -49,45 +41,31 @@
       args:
         executable: powershell
       changed_when: false
-      register: svc_raw
+      register: svc_info
 
-    - name: "取得結果をサービス名で引ける辞書に格納"
-      ansible.builtin.set_fact:
-        svc_map: >-
-          {{ dict((svc_raw.stdout | from_json) | map(attribute='Name')
-             | zip(svc_raw.stdout | from_json)) }}
-
-    # サービス1つ = 1レコード（値はスタートアップの種類）
-    - name: "項目を組み立て"
-      ansible.builtin.set_fact:
-        svc_rows: >-
-          {{ svc_rows | default([]) + [ {
-               'key': (sec.prefix ~ '_' ~ (item.name | regex_replace('[^0-9a-zA-Z]', '_'))),
-               'item': ('サービス / ' ~ item.name ~ ' / スタートアップの種類'),
-               'value': ('存在しない' if not (svc_map[item.name].Exists | bool)
-                         else (svc_start_labels[svc_map[item.name].StartType]
-                               | default(svc_map[item.name].StartType, true)))
-             } ] }}
-      loop: "{{ target_services }}"
+    - name: パラメータシート登録用形式設定
+      set_fact:
+        service_raw: >-
+          {{ service_raw | default({}) | combine({ item.Name: {
+               'name': item.Name,
+               'exists': item.Exists,
+               'start_type': item.StartType,
+               'status': item.Status
+             } }) }}
+      loop: "{{ svc_info.stdout | from_json }}"
       loop_control:
-        label: "{{ item.name }}"
+        label: "{{ item.Name }}"
 
-    - name: "登録用レコードを作成"
-      ansible.builtin.set_fact:
-        svc_record: >-
-          {{ { 'menu': sec_menu,
-               'host_name': inventory_hostname,
-               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
-               'rows': svc_rows } }}
+    - name: 取得情報出力
+      debug:
+        msg: |
+          "{{ service_raw }}"
 
-    - name: "変数ファイルを出力"
-      ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+    - name: パラメータシート登録用ファイル出力
+      blockinfile:
+        create: yes
         mode: '0644'
-        content: "{{ { var_key: svc_record } | to_nice_yaml }}"
+        dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/service"
+        block: |
+          service_info: {{ service_raw | trim | to_json(ensure_ascii=False) }}
       delegate_to: localhost
-      changed_when: true
-
-    - name: "出力内容を表示"
-      ansible.builtin.debug:
-        var: svc_record

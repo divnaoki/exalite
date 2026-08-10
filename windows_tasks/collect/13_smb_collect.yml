@@ -1,25 +1,25 @@
 ---
 # =====================================================================
-# [収集] (13) SMB3.0 マルチチャネルの無効化
-#        -> パラメータシート用の変数ファイル出力
+# [収集] SMB3.0 マルチチャネル設定情報
 #
-# 出力する変数名: collected_smb__<ホスト名>
+# 取得した内容を 1 つの変数へまとめ、パラメータシート登録用ファイルへ
+# smb_info として JSON で出力する。
+#
+#   smb_info: {"enable_multi_channel": false,
+#              "disable_multi_channel_registry": 1}
+#
+# disable_multi_channel_registry が null のときはレジストリ値が存在しない
+# （＝既定の有効状態）。
 # =====================================================================
-- name: "[収集] (13) SMB3.0 マルチチャネルの無効化"
+- name: "13_SMB3.0マルチチャネル設定情報収集"
   hosts: windows
   gather_facts: false
 
-  vars_files:
-    - vars/sections.yml
-
   vars:
-    sec: "{{ param_sections.smb }}"
-    sec_menu: "{{ param_section_menus.smb | default(param_section_menu_default) }}"
-    var_key: "collected_smb__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
     reg_lanman: 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
 
   tasks:
-    - name: "現在の SMB サーバー設定を取得"
+    - name: SMB3.0マルチチャネル設定情報取得（Before）
       ansible.windows.win_shell: |
         $c = Get-SmbServerConfiguration
         # 実体のレジストリ値は EnableMultiChannel ではなく DisableMultiChannel（名前が反転）
@@ -31,30 +31,26 @@
       args:
         executable: powershell
       changed_when: false
-      register: smb_raw
+      register: smb_conf_info
 
-    - name: "登録用レコードを作成"
-      ansible.builtin.set_fact:
-        smb_record: >-
-          {{ { 'menu': sec_menu,
-               'host_name': inventory_hostname,
-               'section': ('(' ~ sec.no ~ ') ' ~ sec.name),
-               'rows': [
-                 { 'key': (sec.prefix ~ '_enable_multichannel'),
-                   'item': 'SmbServerConfiguration / EnableMultiChannel',
-                   'value': ('TRUE' if (cur.EnableMultiChannel | bool) else 'FALSE') }
-               ] } }}
+    - name: パラメータシート登録用形式設定
+      set_fact:
+        smb_raw: >-
+          {{ { 'enable_multi_channel': cur.EnableMultiChannel,
+               'disable_multi_channel_registry': cur.Raw_DisableMultiChannel } }}
       vars:
-        cur: "{{ smb_raw.stdout | from_json }}"
+        cur: "{{ smb_conf_info.stdout | from_json }}"
 
-    - name: "変数ファイルを出力"
-      ansible.builtin.copy:
-        dest: "{{ __conductor_workflowdir__ }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+    - name: 取得情報出力
+      debug:
+        msg: |
+          "{{ smb_raw }}"
+
+    - name: パラメータシート登録用ファイル出力
+      blockinfile:
+        create: yes
         mode: '0644'
-        content: "{{ { var_key: smb_record } | to_nice_yaml }}"
+        dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/smb"
+        block: |
+          smb_info: {{ smb_raw | trim | to_json(ensure_ascii=False) }}
       delegate_to: localhost
-      changed_when: true
-
-    - name: "出力内容を表示"
-      ansible.builtin.debug:
-        var: smb_record
