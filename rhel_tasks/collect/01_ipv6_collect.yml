@@ -1,95 +1,85 @@
 ---
 # =====================================================================
-# [収集] (1) IPv6無効化 -> パラメータシート用の変数ファイル出力
+# [収集] IPv6 設定情報
 #
-# 出力する変数名: collected_ipv6__<ホスト名>
-# 設定は変更せず、現在値の取得のみを行う。
+# 取得した内容を 1 つの変数へまとめ、パラメータシート登録用ファイルへ
+# ipv6_info として JSON で出力する。
+#
+#   ipv6_info:
+#     {"ipv6_enabled": false,            グローバルアドレスの有無による判定
+#      "global_addrs": 0,                グローバル IPv6 アドレス数
+#      "link_addrs": 0,                  リンクローカル IPv6 アドレス数
+#      "sysctl_all_disable_ipv6": "0",   net.ipv6.conf.all.disable_ipv6
+#      "sysctl_default_disable_ipv6": "0",
+#      "connections": {"ens160": "disabled"}}   接続ごとの ipv6.method
+#
+# 対象の接続名は下の ipv6_connections で指定する
+# （設定変更側の変数ファイルは参照しない）。
+# 設定は一切変更しない（読み取りのみ）。
 # =====================================================================
-- name: "[収集] (1) IPv6無効化"
+- name: "01_IPv6設定情報収集"
   hosts: linux
   gather_facts: false
   become: true
 
-  vars_files:
-    - vars/sections.yml
-    - ../vars/01_ipv6_disable.yml
-
   vars:
-    sec: "{{ param_sections.ipv6 }}"
-    sec_menu: "{{ param_section_menus.ipv6 | default(param_section_menu_default) }}"
-    var_key: "collected_ipv6__{{ inventory_hostname | regex_replace('[^0-9a-zA-Z_]', '_') }}"
+    # 収集対象の nmcli 接続名
+    # ※ 接続名に ':' を含む場合は取得結果の分割が崩れるため使わないこと
+    ipv6_connections:
+      - "ens160"
 
   tasks:
-    - name: "出力先ディレクトリを作成"
-      ansible.builtin.file:
-        path: "{{ collect_dir }}"
-        state: directory
-        mode: '0755'
-      delegate_to: localhost
-      become: false
-      run_once: true
-      changed_when: false
-
-    - name: "接続ごとの ipv6.method を取得"
-      ansible.builtin.command:
-        cmd: "nmcli -g ipv6.method connection show {{ item }}"
-      loop: "{{ ipv6_connections }}"
-      changed_when: false
-      check_mode: false
-      register: ipv6_method_raw
-
-    - name: "IPv6 アドレス数を取得"
+    - name: IPv6設定情報取得（Before）
       ansible.builtin.shell:
         cmd: |
           set -o pipefail
-          printf '%s %s\n' \
-            "$(ip -6 -o addr show scope global 2>/dev/null | wc -l)" \
-            "$(ip -6 -o addr show scope link 2>/dev/null | wc -l)"
+          printf 'global_addrs:%s\n' "$(ip -6 -o addr show scope global 2>/dev/null | wc -l)"
+          printf 'link_addrs:%s\n'   "$(ip -6 -o addr show scope link 2>/dev/null | wc -l)"
+          printf 'sysctl_all_disable_ipv6:%s\n'     "$(sysctl -n net.ipv6.conf.all.disable_ipv6 2>/dev/null)"
+          printf 'sysctl_default_disable_ipv6:%s\n' "$(sysctl -n net.ipv6.conf.default.disable_ipv6 2>/dev/null)"
+          for c in {{ ipv6_connections | map('quote') | join(' ') }}; do
+            printf 'conn:%s:%s\n' "$c" "$(nmcli -g ipv6.method connection show "$c" 2>/dev/null)"
+          done
         executable: /bin/bash
       changed_when: false
       check_mode: false
-      register: ipv6_addr_raw
+      register: nmcli_info
 
-    # 接続ごとの ipv6.method を1設定項目 = 1レコードに展開する。
-    - name: "接続ごとの ipv6.method をレコード化"
-      ansible.builtin.set_fact:
-        ipv6_conn_rows: >-
-          {{ ipv6_conn_rows | default([]) + [ {
-               'key': (sec.prefix ~ '_method_'
-                       ~ (item.item | regex_replace('[^0-9a-zA-Z_]', '_'))),
-               'item': ('接続 ' ~ item.item ~ ' / ipv6.method'),
-               'value': (item.stdout | trim | default('取得できず', true)) } ] }}
-      loop: "{{ ipv6_method_raw.results }}"
+    # conn 以外の行は「キー:値」、conn 行は「conn:接続名:値」
+    - name: パラメータシート登録用形式設定
+      set_fact:
+        ipv6_raw: >-
+          {{ ipv6_raw | default({'connections': {}})
+             | combine(({'connections': {f[1]: (f[2] | default('取得できず', true))}}
+                        if f[0] == 'conn'
+                        else {f[0]: f[1]}), recursive=true) }}
+      vars:
+        f: "{{ item.split(':') }}"
+      loop: "{{ nmcli_info.stdout_lines }}"
       loop_control:
-        label: "{{ item.item }}"
+        label: "{{ item }}"
 
-    - name: "登録用レコードを作成"
-      ansible.builtin.set_fact:
-        ipv6_record: >-
-          {{ { 'menu': sec_menu,
-               'host_name': inventory_hostname,
-               'section': ('(' ~ sec.num ~ ') ' ~ sec.name),
-               'rows': ([
-                 { 'key': (sec.prefix ~ '_enabled'),
-                   'item': 'IPv6（グローバルアドレスの有無による判定）',
-                   'value': ('FALSE' if ((ipv6_addr_raw.stdout.split()[0] | int) == 0) else 'TRUE') },
-                 { 'key': (sec.prefix ~ '_global_addrs'),
-                   'item': 'グローバル IPv6 アドレス数',
-                   'value': ipv6_addr_raw.stdout.split()[0] },
-                 { 'key': (sec.prefix ~ '_link_addrs'),
-                   'item': 'リンクローカル IPv6 アドレス数',
-                   'value': ipv6_addr_raw.stdout.split()[1] }
-               ] + (ipv6_conn_rows | default([]))) } }}
+    # グローバル IPv6 アドレスが1つも無ければ「IPv6 無効」と判定する
+    - name: パラメータシート登録用形式設定（有効/無効の判定と型の整理）
+      set_fact:
+        ipv6_raw: >-
+          {{ ipv6_raw | combine({
+               'ipv6_enabled': ((ipv6_raw.global_addrs | int) > 0),
+               'global_addrs': (ipv6_raw.global_addrs | int),
+               'link_addrs': (ipv6_raw.link_addrs | int) }) }}
 
-    - name: "変数ファイルを出力"
-      ansible.builtin.copy:
-        dest: "{{ collect_dir }}/{{ sec.prefix }}_{{ inventory_hostname }}.yml"
+    - name: 取得情報出力
+      debug:
+        msg: |
+          "{{ ipv6_raw }}"
+
+    - name: パラメータシート登録用ファイル出力
+      blockinfile:
+        create: yes
         mode: '0644'
-        content: "{{ { var_key: ipv6_record } | to_nice_yaml }}"
+        dest: "{{ __conductor_workflowdir__ }}/{{ __inventory_hostname__ }}/ipv6"
+        block: |
+          ipv6_info: |
+            {{ ipv6_raw | to_nice_json(indent=2, sort_keys=False, ensure_ascii=False) | indent(2) }}
       delegate_to: localhost
       become: false
-      changed_when: true
-
-    - name: "出力内容を表示"
-      ansible.builtin.debug:
-        var: ipv6_record

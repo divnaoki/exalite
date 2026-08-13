@@ -28,7 +28,8 @@ Exastro のパラメータシートで指定された値を対象サーバーへ
 | [02_service_startup.yml](02_service_startup.yml) | サービス起動設定 | chrony を**自動起動 ON + 起動** | [vars/02_service_startup.yml](vars/02_service_startup.yml) |
 | [03_admin_user.yml](03_admin_user.yml) | 管理者権限ユーザー作成 | **mgAUTOXadm01** | [vars/03_admin_user.yml](vars/03_admin_user.yml) |
 | [04_time_sync.yml](04_time_sync.yml) | 時刻同期設定 | NTPサーバ = **192.168.140.10** | [vars/04_time_sync.yml](vars/04_time_sync.yml) |
-| [main.yml](main.yml) | 上記を 01 → 04 の順にまとめて実行 | - | - |
+| [05_selinux_permissive.yml](05_selinux_permissive.yml) | SELinux Permissive 設定 | SELinux = **permissive** | [vars/05_selinux_permissive.yml](vars/05_selinux_permissive.yml) |
+| [main.yml](main.yml) | 上記を 01 → 05 の順にまとめて実行 | - | - |
 
 収集（現在値の取得と出力）は [collect/](collect/README.md) を参照。
 
@@ -102,6 +103,38 @@ IPv4 は変更しないので同じ IP アドレスで戻る。
 
 このため PHASE 3 の `assert` は「設定が反映されたこと」だけを確認し、
 同期完了までは条件に含めていない。未同期の場合は注意メッセージを表示する。
+
+### 05_selinux_permissive.yml
+
+**`getenforce` が `Permissive` でない場合のみ**、`ansible.posix.selinux` で
+`/etc/selinux/config` の `SELINUX=permissive` に**書き換える**。
+
+> **!!! 重要 !!!** `setenforce` は実行中モードを変えるだけで**再起動すると元に戻る**。
+> 恒久設定にするには `/etc/selinux/config` の書き換えが必須。
+> `ansible.posix.selinux` は設定ファイルの書き換えと実行中モードの変更を**両方**行うため、
+> `setenforce` を別途実行する必要はない。
+
+現在のモードによって、反映に再起動が要るかどうかが変わる。
+
+| 変更前 | 反映方法 | 再起動 |
+|---|---|---|
+| `Enforcing` | config 書き換え + 実行中モードも即時変更 | **不要** |
+| `Disabled` | config 書き換え + カーネルパラメータ `selinux=0` を除去して再起動 | **必要** |
+
+カーネルパラメータに `selinux=0` が付いていると、設定ファイルを `permissive` にしても
+SELinux は無効のまま。`selinux_update_kernel_param: true`（既定）にしておくと
+`ansible.posix.selinux` が grubby で `selinux=0` を除去する。
+
+- **取得するのは `getenforce` と `/etc/selinux/config` の `SELINUX=` の2つだけ。**
+- PHASE 3 の `assert` は `config`（恒久設定）を必ず確認し、`runtime` は
+  「`Disabled` から再起動していない場合」だけ未反映を許容する。その場合は警告を表示する。
+- 再起動は既定で行わない。`selinux_allow_reboot: true` にすると Playbook 内で再起動する。
+- 前提として対象サーバーに **`python3-libselinux`**（モジュールの必須要件）と
+  **`grubby`**（カーネルパラメータ更新時）が必要。無い場合はモジュールがエラーで停止する。
+
+> **補足**: SELinux を無効にしていた期間に作成されたファイルはラベルが付いていない。
+> `Permissive` は遮断しないため実害は出ないが、将来 `Enforcing` にする場合は
+> `touch /.autorelabel` してから再起動し、ファイルシステム全体を再ラベルする必要がある。
 
 ## 前提
 

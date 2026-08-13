@@ -21,3 +21,8 @@
 
 - name: "04_時刻同期設定"
   ansible.builtin.import_playbook: 04_time_sync.yml
+
+# 05 は現在 SELinux が Disabled の場合のみ反映に再起動が必要なため最後に実行する
+# （Enforcing からは setenforce で即時反映されるため再起動は不要）。
+- name: "05_SELinux Permissive 設定"
+  ansible.builtin.import_playbook: 05_selinux_permissive.yml

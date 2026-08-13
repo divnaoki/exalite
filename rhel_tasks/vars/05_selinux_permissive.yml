@@ -1,0 +1,28 @@
+# =====================================================================
+# 05_SELinux Permissive 設定 : 変数定義
+#
+# パラメータシートの対応:
+#   SELinux -> Permissive
+#
+# Permissive は「ポリシー違反を記録するが遮断しない」モード。
+# Enforcing からは setenforce 0 で即時変更できる（再起動不要）。
+# =====================================================================
+
+# SELinux のモード。permissive / enforcing / disabled
+selinux_state: "permissive"
+
+# SELinux ポリシー。state が disabled 以外の場合は必須。
+selinux_policy: "targeted"
+
+# カーネルブートパラメータも更新するか。
+# !!! 重要 !!! カーネルパラメータに selinux=0 が付いていると、設定ファイルを
+# permissive にしても SELinux は無効のままになる。true にしておくと
+# ansible.posix.selinux が grubby で selinux=0 を除去する。
+selinux_update_kernel_param: true
+
+# 現在 Disabled の場合、Permissive にするには再起動が必要
+# （無効状態からは setenforce で有効化できないため）。
+# Playbook 内で再起動まで行うかどうか。
+# False の場合は再起動せず、要再起動である旨を表示して終了する。
+# ※ Enforcing -> Permissive の場合は再起動不要なのでこの値は使われない。
+selinux_allow_reboot: false
