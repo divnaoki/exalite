@@ -129,24 +129,76 @@
       when: nic_before.output[0].RegisterThisConnectionsAddress != (nic1_dns_register_address | bool)
       changed_when: true
 
-    # --- インターフェイスメトリック 自動/手動 ---
-    - name: "インターフェイスメトリック 自動/手動 を設定"
+    # --- インターフェイスメトリック（LAN 種別ごとに固定値を設定）---
+    # パラメータシートの指定値を、自動メトリックを無効にしたうえで設定する。
+    #   サーバサブネット         : 10
+    #   運用管理LANサブネット    : 20
+    #   バックアップLANサブネット: 30
+    # 対象は vars/05_network.yml の interface_metrics。
+    # 対象サーバーに存在しないアダプターはスキップし、PHASE 3 で報告する。
+    - name: "[BEFORE] メトリック対象アダプターの現在設定を取得"
       ansible.windows.win_shell: |
-        Set-NetIPInterface -InterfaceAlias "{{ nic1_display_name }}" -AutomaticMetric {{ 'Enabled' if nic1_interface_metric_auto else 'Disabled' }}
+        # PS5.1 の ConvertFrom-Json は配列を1個のオブジェクトとしてパイプへ流すため、
+        # 一度変数へ受けてから @() で配列化する
+        $namesRaw = '{{ interface_metrics | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $names = @($namesRaw)
+        $list = @()
+        foreach ($n in $names) {
+          $a = Get-NetAdapter -Name $n -ErrorAction SilentlyContinue
+          if ($a) {
+            $ipif = Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+            $list += [PSCustomObject][ordered]@{
+              Name            = $n
+              Found           = $true
+              AutomaticMetric = ($ipif.AutomaticMetric -eq 'Enabled')
+              InterfaceMetric = [int]$ipif.InterfaceMetric
+            }
+          } else {
+            $list += [PSCustomObject][ordered]@{
+              Name = $n; Found = $false; AutomaticMetric = $null; InterfaceMetric = $null
+            }
+          }
+        }
+        ConvertTo-Json -InputObject @($list) -Compress -Depth 4
       args:
         executable: powershell
-      when: nic_before.output[0].AutomaticMetric != (nic1_interface_metric_auto | bool)
-      changed_when: true
+      changed_when: false
+      register: metric_before_raw
 
-    # --- インターフェイスメトリック値（手動時のみ）---
-    - name: "インターフェイスメトリック値 を設定"
+    - name: "[BEFORE] 取得結果をアダプター名で引ける辞書に格納"
+      ansible.builtin.set_fact:
+        metric_before: >-
+          {{ dict((metric_before_raw.stdout | from_json) | map(attribute='Name')
+             | zip(metric_before_raw.stdout | from_json)) }}
+
+    - name: "[BEFORE] メトリックの現在値と指定値を表示"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.label }} ({{ item.name }}) :
+          {{ '存在しない（スキップ）' if not metric_before[item.name].Found
+             else ('自動メトリック=' ~ metric_before[item.name].AutomaticMetric
+                   ~ ' / メトリック=' ~ metric_before[item.name].InterfaceMetric
+                   ~ ' -> 自動メトリック=False / メトリック=' ~ item.metric) }}
+      loop: "{{ interface_metrics }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+    # -InterfaceMetric を指定すると自動メトリックの無効化と値の設定が同時に行われる。
+    # -AutomaticMetric Disabled は単独では指定できない（Windows System Error 87）ため使わない。
+    # 自動メトリックが有効な場合は、値が偶然一致していても手動へ切り替える必要がある。
+    - name: "インターフェイスメトリック値を設定（自動メトリックは無効になる）"
       ansible.windows.win_shell: |
-        Set-NetIPInterface -InterfaceAlias "{{ nic1_display_name }}" -InterfaceMetric {{ nic1_interface_metric_value }}
+        Set-NetIPInterface -InterfaceAlias "{{ item.name }}" -AddressFamily IPv4 -InterfaceMetric {{ item.metric }}
       args:
         executable: powershell
+      loop: "{{ interface_metrics }}"
+      loop_control:
+        label: "{{ item.label }} ({{ item.name }}) -> {{ item.metric }}"
       when:
-        - not (nic1_interface_metric_auto | bool)
-        - (nic_before.output[0].InterfaceMetric | int) != (nic1_interface_metric_value | int)
+        - metric_before[item.name].Found
+        - >-
+          (metric_before[item.name].AutomaticMetric | bool)
+          or ((metric_before[item.name].InterfaceMetric | int) != (item.metric | int))
       changed_when: true
 
     # --- WINSサーバーアドレス ---
@@ -285,3 +337,79 @@
     - name: "[AFTER] 変更後の設定を表示"
       ansible.builtin.debug:
         var: nic_after.output
+
+    # --- インターフェイスメトリックの確認 ---
+    - name: "[AFTER] メトリック対象アダプターの設定を再取得"
+      ansible.windows.win_shell: |
+        $namesRaw = '{{ interface_metrics | map(attribute="name") | list | to_json }}' | ConvertFrom-Json
+        $names = @($namesRaw)
+        $list = @()
+        foreach ($n in $names) {
+          $a = Get-NetAdapter -Name $n -ErrorAction SilentlyContinue
+          if ($a) {
+            $ipif = Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+            $list += [PSCustomObject][ordered]@{
+              Name            = $n
+              Found           = $true
+              AutomaticMetric = ($ipif.AutomaticMetric -eq 'Enabled')
+              InterfaceMetric = [int]$ipif.InterfaceMetric
+            }
+          } else {
+            $list += [PSCustomObject][ordered]@{
+              Name = $n; Found = $false; AutomaticMetric = $null; InterfaceMetric = $null
+            }
+          }
+        }
+        ConvertTo-Json -InputObject @($list) -Compress -Depth 4
+      args:
+        executable: powershell
+      changed_when: false
+      register: metric_after_raw
+
+    - name: "[AFTER] 取得結果をアダプター名で引ける辞書に格納"
+      ansible.builtin.set_fact:
+        metric_after: >-
+          {{ dict((metric_after_raw.stdout | from_json) | map(attribute='Name')
+             | zip(metric_after_raw.stdout | from_json)) }}
+
+    - name: "[AFTER] メトリックの設定結果を表示"
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.label }} ({{ item.name }}) :
+          {{ '存在しないためスキップしました' if not metric_after[item.name].Found
+             else ('自動メトリック=' ~ metric_after[item.name].AutomaticMetric
+                   ~ ' / メトリック=' ~ metric_after[item.name].InterfaceMetric
+                   ~ '（指定値=' ~ item.metric ~ '）') }}
+      loop: "{{ interface_metrics }}"
+      loop_control:
+        label: "{{ item.label }}"
+
+    # 存在したアダプターだけを確認対象にする（存在しないものはスキップ扱い）
+    - name: "[AFTER] メトリックが指定値どおりであることを確認"
+      ansible.builtin.assert:
+        that:
+          - not (metric_after[item.name].AutomaticMetric | bool)
+          - (metric_after[item.name].InterfaceMetric | int) == (item.metric | int)
+        success_msg: >-
+          {{ item.label }} ({{ item.name }}) : 自動メトリック=無効 /
+          メトリック={{ metric_after[item.name].InterfaceMetric }} で設定されています。
+        fail_msg: >-
+          {{ item.label }} ({{ item.name }}) の設定が一致しません
+          (自動メトリック={{ metric_after[item.name].AutomaticMetric }} /
+           メトリック={{ metric_after[item.name].InterfaceMetric }} /
+           期待: 自動メトリック=無効, メトリック={{ item.metric }})。
+      loop: "{{ interface_metrics }}"
+      loop_control:
+        label: "{{ item.label }}"
+      when: metric_after[item.name].Found
+
+    - name: "[AFTER] 存在しなかったアダプターを報告"
+      ansible.builtin.debug:
+        msg: >-
+          !!! 未設定 !!! 次のアダプターは対象サーバーに存在しないため設定していません:
+          {{ interface_metrics | rejectattr('name', 'in',
+               (metric_after.values() | selectattr('Found') | map(attribute='Name') | list))
+             | map(attribute='name') | list }}
+          vars/05_network.yml の interface_metrics のアダプター名を実際の名前に合わせてください。
+      when: >-
+        (metric_after.values() | rejectattr('Found') | list | length) > 0

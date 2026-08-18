@@ -21,9 +21,25 @@ nic1_dns_preferred: "要確定"          # 優先DNS
 nic1_dns_alternate: "要確定"          # 代替DNS
 nic1_dns_register_address: true       # この接続のアドレスをDNSに登録
 
-# --- インターフェイスメトリック ---
-nic1_interface_metric_auto: true      # true=自動 / false=手動
-nic1_interface_metric_value: 10       # 手動時のメトリック値（auto=false のときのみ使用）
+# --- インターフェイスメトリック（LAN 種別ごと）---
+# パラメータシートの指定値。自動メトリックを無効にして固定値を設定する。
+#   name   : Get-NetAdapter の Name（接続名）。表示名ではなく接続名を指定する。
+#   label  : パラメータシート上の呼び名（ログ表示用。処理には使わない）
+#   metric : インターフェイス メトリックの値
+#
+# !!! 要確定 !!! 運用管理LAN / バックアップLAN のアダプター名は環境依存のため、
+# 実際の接続名（Get-NetAdapter の Name）に置き換えてから実行すること。
+# 対象サーバーに存在しないアダプターはエラーにせずスキップし、最後に報告する。
+interface_metrics:
+  - name: "ServerLAN"                 # サーバサブネット
+    label: "サーバサブネット"
+    metric: 10
+  - name: "MgmtLAN"                   # 運用管理LANサブネット（要確定）
+    label: "運用管理LANサブネット"
+    metric: 20
+  - name: "BackupLAN"                 # バックアップLANサブネット（要確定）
+    label: "バックアップLANサブネット"
+    metric: 30
 
 # --- WINS / LMHOSTS / NetBIOS ---
 nic1_wins_address: ""                 # WINSサーバー（未使用なら空文字）
