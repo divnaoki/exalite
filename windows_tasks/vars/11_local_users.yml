@@ -41,7 +41,7 @@ local_users:
     description: ""                 # シート上は未記入
     must_change_password: False     # ユーザーは次回ログオン時にパスワードの変更が必要
     cannot_change_password: False   # ユーザーはパスワードを変更できない
-    password_never_expires: False   # パスワードを無期限にする
+    password_never_expires: True    # パスワードを無期限にする
     account_disabled: False         # アカウントを無効にする
     groups:                         # グループ Administrators > 追加 > ユーザーの選択
       - "Administrators"
@@ -57,7 +57,7 @@ local_users:
     create: False
     must_change_password: False     # □
     cannot_change_password: False   # □
-    password_never_expires: False   # □
+    password_never_expires: True    # ■（既定値は □ → シートで変更）
     account_disabled: True          # ■（既定値は □ → シートで変更）
     groups:
       - "Administrators"

@@ -19,7 +19,7 @@ nic1_ipv4_gateway: "要確定"           # 例: 192.168.10.1
 nic1_dns_auto_obtain: false           # true=自動取得 / false=手動
 nic1_dns_preferred: "要確定"          # 優先DNS
 nic1_dns_alternate: "要確定"          # 代替DNS
-nic1_dns_register_address: true       # この接続のアドレスをDNSに登録
+nic1_dns_register_address: false      # この接続のアドレスをDNSに登録（チェックなし）
 
 # --- インターフェイスメトリック（LAN 種別ごと）---
 # パラメータシートの指定値。自動メトリックを無効にして固定値を設定する。

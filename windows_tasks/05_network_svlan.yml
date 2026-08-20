@@ -21,7 +21,7 @@
 
     # --- 共通設定値 ---
     common_dns_auto_obtain: true     # DNSは自動取得(DHCP)
-    common_dns_register: true        # この接続のアドレスをDNSに登録
+    common_dns_register: false       # この接続のアドレスをDNSに登録（チェックなし）
     common_metric_auto: true         # インターフェイスメトリック自動
     common_netbios: 0                # NetBIOS: 0=既定値
     common_lmhosts_enabled: false    # LMHOSTS参照 無効
